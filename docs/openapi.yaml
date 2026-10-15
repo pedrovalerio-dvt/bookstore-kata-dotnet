@@ -1,309 +1,354 @@
-openapi: 3.0.3
+# Generated from the .NET API /openapi/v1.json; see docs/technical-architecture.md.
+openapi: 3.0.4
 info:
-  title: Legacy Bookstore API
-  version: 0.1.0-SNAPSHOT
-  description: |
-    As-is contract reconstructed from the Java source, not a proposed redesign.
-    The server registers BookController with Jersey/Grizzly at /api/.
-    No authentication or authorization is implemented in the application.
-
-    Application-generated failures have no error DTO. Framework-generated
-    failures have no application-defined media type or body schema; in
-    particular, errors are not guaranteed to be JSON or Problem Details.
-    Responses without a content declaration below deliberately leave the
-    framework error representation unspecified, except where an explicitly
-    empty application response is described.
-
-    Java Date fields use the registered JSON-B provider's default date mapping.
-    The date-time schemas describe that default mapping, not a custom format
-    enforced by application validation. Null reference properties normally
-    follow JSON-B's default omission behavior. No wire-level execution was used
-    to establish provider-specific parsing, formatting, or error bodies.
+  title: Bookstore API
+  description: 'MongoDB-backed .NET 10 API. No application authentication is configured. Errors use Problem
+    Details with a trace instance and X-Trace-Id header. Dates are ISO 8601 date-times. Null response
+    properties are omitted. Category names are case-sensitive: Fiction, Non-Fiction, Science, Biography,
+    Children, Programming.'
+  version: 1.0.0
 servers:
-  - url: http://localhost:8080/api
-    description: Host access through the Docker Compose port mapping.
-security: []
-tags:
-  - name: Books
-    description: Catalogue records and inventory quantity.
-  - name: Health
-    description: Process-level HTTP reachability only.
+- url: /
 paths:
-  /books:
+  /api/books:
     get:
-      tags: [Books]
-      operationId: listBooks
-      summary: List books, optionally filtered by an exact category name.
-      description: |
-        Reads the entire books collection. Recognized category names are
-        filtered in memory. Missing, empty, unrecognized, or incorrectly cased
-        category values return the entire collection, not an error or an empty
-        filtered result. Active and inactive books are included. There is no
-        pagination, explicit sort, or guaranteed ordering.
+      tags:
+      - Books
+      summary: List books, optionally by exact category name.
+      description: Missing category lists all books, including inactive ones. Unknown or empty category
+        returns 400. No pagination or guaranteed ordering.
+      operationId: ListBooks
       parameters:
-        - name: category
-          in: query
-          required: false
-          description: |
-            Case-sensitive category name: Fiction, Non-Fiction, Science,
-            Biography, Children, or Programming. Other strings disable filtering.
-          schema:
-            type: string
-          example: Programming
+      - name: category
+        in: query
+        schema:
+          type: string
       responses:
         '200':
-          description: All matching books; an empty collection produces an empty array.
+          description: OK
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/Book'
-              examples:
-                empty:
-                  value: []
-                catalogue:
-                  value:
-                    - id: 507f1f77bcf86cd799439011
-                      title: Test Driven Development
-                      author: Kent Beck
-                      categoryId: 6
-                      quantity: 3
-                      description: A book about TDD
-                      language: English
-                      active: true
-                      publisher: Addison-Wesley
-        '406':
-          $ref: '#/components/responses/NotAcceptable'
+        '400':
+          description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '500':
-          $ref: '#/components/responses/InternalServerError'
+          description: Internal Server Error
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
     post:
-      tags: [Books]
-      operationId: createBook
-      summary: Create a new book with a generated MongoDB identifier.
-      description: |
-        Only title != null is checked by the controller; empty and whitespace
-        titles pass. Missing/null title returns an empty 404, not a validation
-        problem. Duplicate titles are allowed by application logic.
-
-        Despite its name, request categoryId is a category NAME, not a number
-        or numeric string. A non-null unrecognized name causes an unhandled
-        null dereference (500). Missing/null categoryId becomes numeric 0.
-        Negative quantities and inconsistent active/inactiveDate combinations
-        are not rejected. There is no Location header set by the controller.
+      tags:
+      - Books
+      summary: Create a book; categoryId accepts an exact category name.
+      description: Requires a nonblank title and nonnegative quantity. Unknown categories return 400.
+        Inactive creation without a date uses server UTC time.
+      operationId: CreateBook
       requestBody:
-        required: true
-        description: |
-          JSON object bound to CreateBookDTO. Title must be non-null for the
-          success branch, but is intentionally not schema-required because the
-          implemented missing/null-title branch returns 404.
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateBookRequest'
-            example:
-              title: Test Driven Development
-              author: Kent Beck
-              categoryId: Programming
-              quantity: 3
-              description: A book about TDD
-              language: English
-              active: true
-              publisher: Addison-Wesley
+        required: true
       responses:
         '201':
-          description: Inserted book, constructed from the submitted fields and generated ID.
+          description: Created
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+            Location:
+              description: Lookup URL for the created book.
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Book'
         '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          description: Empty response when title is missing or null in a bound request object.
-        '406':
-          $ref: '#/components/responses/NotAcceptable'
+          description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '415':
-          $ref: '#/components/responses/UnsupportedMediaType'
+          description: Unsupported Media Type
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '500':
-          description: |
-            Unhandled failure, including an unrecognized non-null category name,
-            database failure, or a null request object reaching the controller.
-            No application-defined error payload or media type.
+          description: Internal Server Error
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
     put:
-      tags: [Books]
-      operationId: updateBook
-      summary: Set quantity and active status using an ID in the request body.
-      description: |
-        This is not a full replacement and is not a database upsert. It updates
-        quantity, active, and inactiveDate only. Missing quantity resets it to 0;
-        missing active resets it to false. Deactivation sets inactiveDate to the
-        server's current time; activation clears it to null.
-
-        Missing/null id returns an empty 404. A nonblank malformed ObjectId
-        causes an unhandled exception (500). A blank/whitespace id generates a
-        fresh ObjectId but still takes the update-only branch.
-
-        Matched/modified counts are ignored: a well-formed nonexistent id can
-        return 201 without writing any record. The result is a newly constructed
-        Book, not a reread of the stored book: categoryId is 0 and other
-        non-update metadata is null (normally omitted by default JSON-B).
-        Existing stored metadata is preserved. No Location header is set.
+      tags:
+      - Books
+      summary: Set quantity and active status, returning the complete persisted book.
+      description: Id, quantity, and active must all be supplied. An unmatched ID returns 404; this does
+        not insert a book. Deactivation stamps inactiveDate and activation clears it.
+      operationId: UpdateBook
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/UpdateBookRequest'
-            example:
-              id: 507f1f77bcf86cd799439011
-              quantity: 5
-              active: false
+        required: true
       responses:
-        '201':
-          description: |
-            Update attempt completed, even if no record matched. This response
-            is not evidence that a book exists and is not a complete persisted
-            book representation.
+        '200':
+          description: OK
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Book'
-              example:
-                id: 507f1f77bcf86cd799439011
-                categoryId: 0
-                quantity: 5
-                active: false
-                inactiveDate: '2026-10-15T08:00:00Z'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '404':
-          description: Empty response when id is missing or null in a bound request object.
-        '406':
-          $ref: '#/components/responses/NotAcceptable'
+          description: Not Found
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '415':
-          $ref: '#/components/responses/UnsupportedMediaType'
+          description: Unsupported Media Type
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '500':
-          description: |
-            Unhandled failure, including malformed nonblank ObjectId, database
-            failure, or a null request object reaching the controller.
-            No application-defined error payload or media type.
-  /books/single:
+          description: Internal Server Error
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/books/single:
     get:
-      tags: [Books]
-      operationId: getBook
-      summary: Attempt to find one book by exact title and/or ID.
-      description: |
-        With name present, scans all books and takes the first exact,
-        case-sensitive title match. Duplicate-title selection is not ordered.
-        A stored null title can cause an unhandled null dereference during
-        this scan.
-
-        With id present, performs a separate full scan and compares Java
-        String references using == instead of comparing values. Equal ID text
-        therefore does not reliably find the book. If both filters are present,
-        name is processed first; a successful ID comparison overwrites that
-        result, while an unsuccessful ID comparison leaves it unchanged.
-
-        With neither filter, or no match, returns explicit status 200 with no
-        entity. This is not a 404 and not an application-generated JSON null.
-        Any supplied author value, including an empty string, throws an
-        unhandled RuntimeException before either lookup.
+      tags:
+      - Books
+      summary: Find a book by exactly one of id or exact title.
+      description: Supply exactly one of id or name. Author filtering is unsupported and returns 400.
+      operationId: GetBook
       parameters:
-        - name: id
-          in: query
-          required: false
-          description: ID text; affected by the reference-equality defect. Not parsed as ObjectId here.
-          schema:
-            type: string
-          example: 507f1f77bcf86cd799439011
-        - name: name
-          in: query
-          required: false
-          description: Exact book title, not an author or partial-title search.
-          schema:
-            type: string
-          example: Test Driven Development
-        - name: author
-          in: query
-          required: false
-          description: |
-            Declared but NOT IMPLEMENTED. Supplying any value triggers an
-            unhandled exception, normally HTTP 500. Do not use for filtering.
-          schema:
-            type: string
+      - name: id
+        in: query
+        schema:
+          type: string
+      - name: name
+        in: query
+        schema:
+          type: string
+      - name: author
+        in: query
+        schema:
+          type: string
       responses:
         '200':
-          description: A matching book as JSON, or an empty body if the service returns null.
+          description: OK
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Book'
-        '406':
-          $ref: '#/components/responses/NotAcceptable'
+        '400':
+          description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '500':
-          description: |
-            Unhandled failure, including any supplied author query parameter,
-            a null stored title during name lookup, or a database failure.
-            No application-defined error payload or media type.
-  /books/health:
+          description: Internal Server Error
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/books/health:
     get:
-      tags: [Health]
-      operationId: checkBooksHealth
-      summary: Check that the HTTP handler responds.
-      description: |
-        Returns immediately without contacting MongoDB. A successful result
-        does not establish database readiness or that book operations work.
+      tags:
+      - Books
+      summary: HTTP liveness only; does not query MongoDB.
+      operationId: BooksHealth
       responses:
         '200':
-          description: Empty response; no JSON health object.
-        '406':
-          $ref: '#/components/responses/NotAcceptable'
+          description: OK
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
 components:
   schemas:
-    CreateBookRequest:
+    Book:
+      required:
+      - id
+      - categoryId
+      - quantity
+      - active
       type: object
-      description: |
-        DTO has no Bean Validation annotations. Optional reference properties
-        default to null; primitive defaults apply when properties are omitted.
-        No application-level unknown-property policy is configured.
       properties:
+        id:
+          type: string
         title:
           type: string
           nullable: true
-          description: Missing/null produces 404; empty and whitespace strings are not rejected.
         author:
           type: string
           nullable: true
         categoryId:
-          type: string
-          nullable: true
-          description: |
-            Category NAME: Fiction, Non-Fiction, Science, Biography, Children,
-            or Programming. Missing/null stores 0; any other non-null string
-            causes 500. Not an enum constraint because invalid input reaches
-            the service instead of a validation response.
-          example: Programming
+          type: integer
+          format: int32
         quantity:
           type: integer
           format: int32
-          default: 0
-          description: Absolute inventory quantity; no nonnegative constraint.
         description:
           type: string
           nullable: true
         language:
           type: string
           nullable: true
-          description: Free text; no language-code validation.
         active:
           type: boolean
+        inactiveDate:
+          type: string
+          format: date-time
+          nullable: true
+        publisher:
+          type: string
+          nullable: true
+        publisherDate:
+          type: string
+          format: date-time
+          nullable: true
+    CreateBookRequest:
+      required:
+      - title
+      type: object
+      properties:
+        title:
+          type: string
+          description: Nonblank title. Duplicate titles remain allowed.
+        author:
+          type: string
+          nullable: true
+        categoryId:
+          type: string
+          description: Exact category NAME, not numeric ID. Omitted/null maps to category 0.
+          nullable: true
+        quantity:
+          maximum: 2147483647
+          minimum: 0
+          type: integer
+          description: Absolute stock quantity; defaults to zero.
+          format: int32
+          default: 0
+        description:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          description: Defaults to true. Active books cannot have an inactiveDate.
           default: true
         inactiveDate:
           type: string
+          description: UTC date-time; inactive creation defaults to server time if omitted.
           format: date-time
           nullable: true
-          description: Java Date via default JSON-B; stored as supplied on creation.
         publisher:
           type: string
           nullable: true
@@ -311,101 +356,46 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: Java Date via default JSON-B; no chronology validation.
-    UpdateBookRequest:
+    ProblemDetails:
+      required:
+      - type
+      - title
+      - status
+      - detail
+      - instance
+      - traceId
       type: object
-      description: |
-        Only these three bean properties are defined. This is not a patch DTO:
-        omitted primitive fields still overwrite stored values with defaults.
       properties:
-        id:
+        type:
           type: string
-          nullable: true
-          description: |
-            Missing/null produces 404. A nonblank value must parse as a MongoDB
-            ObjectId (normally 24 hexadecimal characters) or causes 500. A
-            blank value generates an ID for an update attempt, not an insert.
-        quantity:
-          type: integer
-          format: int32
-          default: 0
-          description: Absolute replacement quantity, not an increment; negatives are accepted.
-        active:
-          type: boolean
-          default: false
-          description: False stamps inactiveDate with server time; true clears it.
-    Book:
-      type: object
-      description: |
-        Shared service result. Nullable reference properties can be omitted by
-        default JSON-B. Update responses do not include existing stored
-        metadata and report categoryId 0 regardless of the persisted category.
-      required: [id, categoryId, quantity, active]
-      properties:
-        id:
-          type: string
-          description: MongoDB ObjectId rendered as a hexadecimal string.
-          example: 507f1f77bcf86cd799439011
         title:
           type: string
-          nullable: true
-        author:
-          type: string
-          nullable: true
-        categoryId:
+        status:
           type: integer
           format: int32
-          description: |
-            Numeric category ID (1 Fiction, 2 Non-Fiction, 3 Science,
-            4 Biography, 5 Children, 6 Programming). Zero means unset/default
-            in application-created data or the incomplete update result.
-            No response enum is enforced on existing MongoDB records.
+        detail:
+          type: string
+        instance:
+          type: string
+        traceId:
+          type: string
+    UpdateBookRequest:
+      required:
+      - id
+      - quantity
+      - active
+      type: object
+      properties:
+        id:
+          pattern: ^[0-9a-fA-F]{24}$
+          type: string
         quantity:
+          maximum: 2147483647
+          minimum: 0
           type: integer
           format: int32
-        description:
-          type: string
-          nullable: true
-        language:
-          type: string
-          nullable: true
         active:
           type: boolean
-        inactiveDate:
-          type: string
-          format: date-time
-          nullable: true
-        publisher:
-          type: string
-          nullable: true
-        publisherDate:
-          type: string
-          format: date-time
-          nullable: true
-  responses:
-    BadRequest:
-      description: |
-        Framework-level request decoding/binding failure, for example malformed
-        JSON. Exact status for individual coercion or null-body cases and the
-        response representation are provider-dependent; no custom mapper is
-        registered. This is not the application's missing-title/id response.
-    NotAcceptable:
-      description: |
-        Framework media negotiation failure when Accept excludes the supported
-        application/json representation. No application-defined error schema.
-    UnsupportedMediaType:
-      description: |
-        Framework rejection of a request media type unsupported by the
-        application/json-consuming endpoint. No application-defined error schema.
-    InternalServerError:
-      description: |
-        Unhandled application, MongoDB, or document-mapping exception.
-        No application-defined error payload, headers, or media type.
-x-framework-routing:
-  description: |
-    Only explicitly declared resource operations are listed under paths.
-    Jersey/JAX-RS also provides implicit HEAD handling for GET resources and
-    OPTIONS handling. Unsupported methods on matched resources normally yield
-    405 with an Allow header; unmatched resource paths yield 404. These are
-    framework behaviors, not additional BookController methods. Error bodies
-    are not specified by this application.
+          description: False stamps inactiveDate with server time; true clears it.
+tags:
+- name: Books

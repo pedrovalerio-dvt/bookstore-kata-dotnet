@@ -1,14 +1,18 @@
-# --- Build stage ---
-FROM maven:3.8.6-eclipse-temurin-11 AS build
-WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline -q
-COPY src ./src
-RUN mvn package -DskipTests -q
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /source
+COPY global.json Directory.Build.props Directory.Packages.props ./
+COPY src/Bookstore.Core/Bookstore.Core.csproj src/Bookstore.Core/
+COPY src/Bookstore.Infrastructure/Bookstore.Infrastructure.csproj src/Bookstore.Infrastructure/
+COPY src/Bookstore.Api/Bookstore.Api.csproj src/Bookstore.Api/
+RUN dotnet restore src/Bookstore.Api/Bookstore.Api.csproj
+COPY src/Bookstore.Core/ src/Bookstore.Core/
+COPY src/Bookstore.Infrastructure/ src/Bookstore.Infrastructure/
+COPY src/Bookstore.Api/ src/Bookstore.Api/
+RUN dotnet publish src/Bookstore.Api/Bookstore.Api.csproj -c Release --no-restore -o /app/publish
 
-# --- Run stage ---
-FROM eclipse-temurin:11-jre-jammy
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
-COPY --from=build /app/target/bookstore-java-0.1.0-SNAPSHOT.jar app.jar
+COPY --from=build /app/publish .
+USER $APP_UID
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["dotnet", "Bookstore.Api.dll"]

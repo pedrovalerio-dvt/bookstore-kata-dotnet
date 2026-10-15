@@ -2,3 +2,8 @@
 graphify-out/
 .rtk/
 .DS_Store
+**/bin/
+**/obj/
+**/TestResults/
+artifacts/
+.vs/

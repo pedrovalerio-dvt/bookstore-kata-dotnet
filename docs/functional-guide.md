@@ -1,68 +1,37 @@
 # Bookstore functional guide
 
-## Purpose and evidence boundary
+## Scope and compatibility
 
-This guide describes the catalogue and stock-management behavior implemented in
-this repository. It is intended for Product Owners and Business Managers and
-records current behavior, including defects, rather than an ideal future design.
-The implementation is a Java HTTP API with MongoDB storage. Despite the
-repository name, there is no .NET application, browser interface, or outbound
-HTTP client in the tracked application source. Consequently, no user-interface
-screens, frontend validation, or web-to-backend integration can be established
-from this repository.
+This guide describes the migrated .NET 10 API. There is no web frontend in this
+repository. The API manages a catalogue and absolute stock quantities; it does
+not implement purchasing, reservations, pricing, deletion, or user accounts.
 
-The conclusions below come from the controller, service, data models, startup
-code, database initializer, and the existing controller test. They are
-source-derived, not observations of a running deployment. Dates and automatic
-HTTP error handling depend on the configured framework defaults.
+Existing routes, camel-case JSON field names, MongoDB identifiers, and stored
+book metadata are retained. Defects and invalid-input behavior were deliberately
+corrected during migration. The [legacy guide](legacy/functional-guide.md)
+records the Java behavior at commit `cebc7fb`; it is not the current contract.
+See [OpenAPI](openapi.yaml) for payloads and
+[architecture](technical-architecture.md) for implementation and rollout details.
 
-The companion [OpenAPI specification](openapi.yaml) is the machine-readable
-contract. The [technical architecture](technical-architecture.md) explains
-implementation details and source references.
+## Catalogue information
 
-## Supported capabilities
-
-| Capability | Current behavior |
+| Field | Meaning and current rule |
 |---|---|
-| Create a book | Adds a new catalogue record with a generated identifier. |
-| Update a book | Sets absolute quantity and active status; maintains the inactivity timestamp. |
-| Get a book | Attempts an exact title and/or identifier lookup; identifier lookup is defective. |
-| List books | Returns the catalogue, optionally filtered by a recognized category name. |
-| Health check | Confirms that an HTTP handler responds, not that storage is operational. |
+| `id` | Generated 24-character hexadecimal MongoDB ID; preserved for existing records. |
+| `title` | Required, nonblank on creation; duplicate titles remain allowed. |
+| `author` | Optional free text. Author search remains unsupported. |
+| `categoryId` | Creation accepts an exact category **name**; responses contain a numeric category ID. Missing/null creates category `0`. |
+| `quantity` | Nonnegative integer representing absolute stock, not a stock adjustment. Creation defaults to `0`; update must explicitly supply it. |
+| `description`, `language`, `publisher` | Optional free text, without a controlled vocabulary or new length restriction. |
+| `active` | Creation defaults to `true`; update must explicitly supply it. Inactive books remain visible in list and lookup results. |
+| `inactiveDate` | Active creation must not supply a non-null value. Inactive creation preserves a supplied date or uses server UTC time. Updates stamp server UTC time when inactive and clear the date when active. |
+| `publisherDate` | Optional ISO 8601 date-time; no business chronology restriction. |
 
-There is no implemented deletion, author search, category-management API,
-pagination, sorting control, sales, reservations, checkout, pricing, or stock
-movement history. The earlier README's claim that deletion is supported is not
-backed by a route in the code.
+Dates are stored as MongoDB UTC dates with millisecond precision. Null response
+fields are omitted. Legacy records may still contain missing metadata, negative
+stock, or inconsistent dates; migration does not rewrite historical data.
 
-No application authentication or authorization is configured. The code does not
-distinguish shoppers, administrators, or stock managers. This does not establish
-whether an external deployment gateway restricts access.
-
-## Information recorded for each book
-
-| Information | Business meaning and current constraint |
-|---|---|
-| Identifier (`id`) | Generated on creation. Used in the update request body. Identifier lookup cannot currently be relied upon. |
-| Title (`title`) | Must be present and non-null to reach the create success branch. Empty or whitespace-only titles are allowed. There is no application uniqueness check. |
-| Author (`author`) | Optional free text. There is no functioning author filter. |
-| Category (`categoryId`) | Creation takes a category **name**, but responses contain a numeric category ID. Omitting the category stores `0`, which is outside the six defined categories. |
-| Quantity (`quantity`) | Whole-number absolute stock value. Missing values default to `0`. Negative values are not rejected. It is not a stock increment or decrement command. |
-| Description (`description`) | Optional free text. |
-| Language (`language`) | Optional free text, not a validated language code. |
-| Active status (`active`) | Defaults to `true` on creation but `false` on update if omitted. It does not hide a book from list or lookup operations. |
-| Inactive date (`inactiveDate`) | Optional date on creation. On update, generated using server time for inactive books and cleared for active books. |
-| Publisher (`publisher`) | Optional free text. |
-| Publisher date (`publisherDate`) | Optional date. No chronology or relationship to other dates is validated. |
-
-Text length, title/author uniqueness, language vocabularies, date ordering,
-nonnegative stock, and consistency between active status and inactive date are
-not validated by application logic. Transport-level JSON parsing and Java data
-types can still reject values that cannot be represented.
-
-### Categories
-
-| Numeric response/storage ID | Exact creation/filter name |
+| Numeric ID | Exact category name |
 |---|---|
 | 1 | Fiction |
 | 2 | Non-Fiction |
@@ -71,24 +40,13 @@ types can still reject values that cannot be represented.
 | 5 | Children |
 | 6 | Programming |
 
-Names are case-sensitive and are not trimmed. For example, `Programming` is
-recognized, but `programming`, `6`, and `Programming ` are not. These categories
-are defined in application code. Although the database initializer also creates
-category records, editing those database records does not change API behavior.
+Category names are case-sensitive and are not trimmed. `Programming` is valid;
+`programming`, `6`, and `Programming ` are not. The category vocabulary is defined
+in code, not controlled by edits to the legacy database categories collection.
 
-## Workflow: create a book
+## Create a book
 
-1. Submit a JSON object to `POST /api/books`.
-2. The controller checks only whether the title is non-null. A missing or null
-   title returns status `404` with an empty body. An empty title passes this check.
-3. If a category name is supplied, the service resolves it against the six
-   names above. An unknown non-null name causes an unhandled server error
-   rather than a business validation message. A missing/null category becomes `0`.
-4. The service generates an identifier and inserts a new MongoDB book document.
-5. The API returns `201` and the constructed book representation. It does not
-   set a `Location` response header.
-
-Example request:
+Submit `POST /api/books`:
 
 ```json
 {
@@ -96,32 +54,25 @@ Example request:
   "author": "Kent Beck",
   "categoryId": "Programming",
   "quantity": 3,
-  "language": "English",
   "active": true,
   "publisher": "Addison-Wesley"
 }
 ```
 
-The response contains a generated string `id` and numeric `categoryId: 6`.
-Missing optional text/date fields remain null in the model and are normally
-omitted by the default JSON serializer.
+A successful response is `201 Created` with the complete inserted book and a
+`Location` header pointing to `/api/books/single?id=<generated-id>`.
+The returned `categoryId` is `6`, not `"Programming"`.
 
-Creation does not derive an inactivity timestamp from active status. An inactive
-book may be created without an inactive date, and an active book may be created
-with one. Submitting the same details again creates another record: there is no
-application duplicate detection or idempotency key.
+Blank/missing title, negative quantity, unknown category, and an active book
+with an inactivity date return `400`. Invalid JSON or invalid date syntax also
+returns `400`. A non-JSON request media type returns `415`.
 
-## Workflow: update stock and active status
+Creation does not deduplicate books and does not support idempotency keys.
+Retrying a successful creation can insert another book.
 
-1. Obtain the target identifier from a create or list response.
-2. Submit `id`, `quantity`, and `active` to `PUT /api/books`. The identifier is
-   in the JSON body, not in the URL.
-3. The controller rejects a missing/null ID with an empty `404`. A malformed
-   nonblank identifier causes a server error. A blank/whitespace identifier
-   generates a fresh identifier but still attempts an update, not an insert.
-4. The service writes quantity, active status, and inactive date only.
-5. If the database operation returns without an exception, the controller
-   returns `201`, even if no book matched the identifier.
+## Update quantity and active status
+
+Submit `PUT /api/books`:
 
 ```json
 {
@@ -131,117 +82,95 @@ application duplicate detection or idempotency key.
 }
 ```
 
-**Always send both quantity and active status.** Omitting quantity overwrites it
-with `0`; omitting active overwrites it with `false` and triggers deactivation.
-This operation does not preserve omitted values like a partial patch.
+All three properties must be present with valid non-null values. Omitting
+quantity or active returns `400` rather than silently resetting inventory.
+The identifier must be exactly 24 hexadecimal characters. Negative stock is
+rejected. Quantity is an absolute replacement, not an increment or decrement.
 
-| Update action | Inactive date behavior |
-|---|---|
-| Set active to `false` | Sets the date to the server's current time. |
-| Repeat an inactive update | Replaces the previous date with a new timestamp. |
-| Set active to `true` | Clears the inactive date to null. |
+Success returns `200 OK` with the complete persisted record, including existing
+title, category, author, and publication metadata. A well-formed ID that does
+not exist returns `404`; no new book is inserted.
 
+Setting active to false sets inactiveDate to the current server UTC time,
+including on repeated inactive updates. Setting active to true clears it.
 Title, author, category, description, language, publisher, and publisher date
-cannot be changed through this update DTO. Their stored values are left intact.
-The response is not a fresh copy of the stored record: it contains update
-values, numeric category `0`, and null/omitted descriptive fields. Consumers
-must not replace their complete book display with this response or interpret
-category `0` as a successful recategorization.
+are not editable through this operation.
 
-A successful status is **not confirmation that a book was found or changed**.
-The service does not inspect the database matched/modified counts and does not
-create a missing record. A subsequent list can be used to inspect persisted
-state; the single-book ID lookup is unreliable.
+Each update is atomic for one book. There is no version/conflict check: competing
+absolute quantity assignments use last-write-wins behavior.
 
-## Workflow: get one book
+## Get one book
 
-Call `GET /api/books/single` with optional query parameters:
+Use exactly one lookup filter:
 
-| Parameter combination | Implemented behavior |
+- `GET /api/books/single?id=507f1f77bcf86cd799439011`
+- `GET /api/books/single?name=Test%20Driven%20Development`
+
+ID lookup now compares the actual MongoDB ID value, including uppercase
+hexadecimal input, rather than Java string reference identity. Title lookup is
+an exact match under the collection's collation (case-sensitive with the normal
+MongoDB default). Duplicate titles are allowed; selection is not ordered.
+
+A found book returns `200`; a miss returns `404`. Supplying neither filter,
+both filters, an invalid ID, a blank title, or any `author` parameter returns
+`400`. Author filtering was not implemented as part of the migration.
+
+## List books
+
+`GET /api/books` returns all books as a JSON array.
+`GET /api/books?category=Programming` returns numeric category `6`.
+No matching records produces `[]`.
+
+An unknown, empty, or incorrectly cased category returns `400`; it no longer
+silently disables filtering. Filtering is executed in MongoDB rather than
+after loading the entire catalogue.
+
+There is still no pagination, explicit sorting, title filter on list, or
+active-status filter. Results include inactive and legacy negative-stock books.
+Consumers must not assume ordering.
+
+## Error feedback and operation
+
+All application errors use an RFC 7807 Problem Details response, for example:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Book not found",
+  "status": 404,
+  "detail": "No book matched the supplied identifier or title.",
+  "instance": "urn:trace:example-trace-id",
+  "traceId": "example-trace-id"
+}
+```
+
+The `instance` and `traceId` values correlate with the `X-Trace-Id` response
+header and JSON request logs. They are diagnostic identifiers, not book IDs.
+Unexpected server failures return a generic `500` message, not internal
+exception details. Authentication/authorization is unchanged: no application
+identity provider or access policy is configured. Production access control
+must be supplied by an approved deployment policy.
+
+`GET /api/books/health` returns an empty `200`. It establishes HTTP liveness
+only and does not prove MongoDB readiness.
+
+## Migration changes requiring consumer review
+
+| Java behavior | Current .NET behavior |
 |---|---|
-| `name` only | First exact, case-sensitive title match from an unsorted full catalogue scan. |
-| `id` only | Attempts lookup, but compares string object identity rather than ID text. Normal requests cannot rely on a match. |
-| Both `name` and `id` | Searches by name first, then scans again for ID. An ID match replaces the name result; an ID miss leaves the name result unchanged. This is not an AND filter. |
-| Neither | Returns `200` with no entity and does not query storage. |
-| `author` present | Immediately fails with an unhandled exception, including when its value is empty. |
-| No match | Returns `200` with an empty body, not `404`. |
+| Missing title or update ID returned empty 404 | Invalid input returns 400 Problem Details |
+| Blank title/negative stock accepted | Rejected on new writes |
+| Unknown create category failed with 500 | Returns 400 |
+| Unknown list category returned all books | Returns 400 |
+| ID lookup used reference equality | Correct MongoDB ID lookup |
+| No match returned empty 200 | Returns 404 Problem Details |
+| Both lookup filters had precedence rules | Exactly one filter required |
+| Author query threw an unhandled exception | Returns explicit 400 |
+| Missing update fields reset inventory | Both fields required; missing fields rejected |
+| Update returned 201 and incomplete metadata | Returns 200 and complete persisted state |
+| Unmatched update falsely returned success | Returns 404; no insert |
+| Inactive create could omit inactivity timestamp | Uses server UTC timestamp if omitted |
+| Active creation accepted an inactivity date | Rejects inconsistent new input |
 
-Example: `GET /api/books/single?name=Test%20Driven%20Development`.
-Duplicate titles are permitted, so title lookup is not an unambiguous business
-key and selection order is not guaranteed. If a stored book has a null title,
-name lookup can fail while scanning it.
-
-Active status and stock quantity do not restrict lookup. An inactive or
-zero/negative-stock book is still eligible.
-
-## Workflow: list books
-
-Call `GET /api/books` to retrieve all books or
-`GET /api/books?category=Programming` to retrieve category `6`.
-
-The API returns `200` and a JSON array; no records produces `[]`. It includes
-inactive books and books with any stock quantity. A recognized category with
-no matching records produces `[]`.
-
-**An unrecognized category returns all books.** Missing, empty, incorrectly
-cased, or otherwise unrecognized values disable filtering rather than
-returning an error. This differs from creation, where an unknown category
-causes a server error.
-
-There is no page size, continuation token, total-count envelope, explicit sort,
-title search, or active-status filter. Results are a bare array with unspecified
-ordering. Large catalogues are read in full even for category filtering.
-
-## Failure handling and operational meaning
-
-| Situation | Observable application outcome / limitation |
-|---|---|
-| Missing/null create title | Empty `404`. |
-| Missing/null update ID | Empty `404`. |
-| No single-book result | Empty `200`. |
-| Unsupported author filter | Unhandled exception, normally `500`. |
-| Unknown non-null create category | Unhandled exception, normally `500`. |
-| Malformed nonblank update ID | Unhandled exception, normally `500`. |
-| Database unavailable or incompatible stored document | Unhandled failure; no friendly business error is constructed. |
-| Malformed JSON / unsupported request media type | Framework-level failure, normally `400` / `415`; precise decoding cases depend on the provider. |
-| Unsupported response media type | Framework negotiation can return `406`. |
-| Unmatched URL / unsupported HTTP method | Framework routing normally returns `404` / `405`. |
-
-There is no common error JSON object, business error code, Problem Details
-implementation, or client-facing error message contract. The exception text
-`Filtering by author is not implemented yet` exists in the code but is not a
-guaranteed HTTP response body.
-
-`GET /api/books/health` returns an empty `200` without querying MongoDB. It is
-only a reachability signal; it must not be interpreted as proof that catalogue
-reads or writes are available.
-
-## Product implications and unimplemented guarantees
-
-The current API supports basic catalogue insertion and stock/status edits, not
-a complete retail inventory workflow. In particular:
-
-- Quantity updates overwrite a value; there are no reservations, atomic
-  increments, nonnegative-stock protection, or conflict/version checks.
-- Inactivity is a flag, not deletion or a visibility rule. The timestamp is the
-  latest deactivation update time, not an immutable history.
-- There is no audit trail, user attribution, purchase workflow, financial
-  information, or documented retention policy.
-- Identifier lookup, successful-update confirmation, category input semantics,
-  omitted-field resets, and error feedback impose integration risks.
-
-These are implementation limitations, not approved future requirements.
-No remediation or application changes are included in these deliverables.
-
-## Evidence map
-
-| Subject | Source |
-|---|---|
-| Routes and controller status codes | `src/main/java/com/bookstore/controller/BookController.java:9-93` |
-| Create fields and defaults | `src/main/java/com/bookstore/controller/CreateBookDTO.java:5-100` |
-| Update fields and defaults | `src/main/java/com/bookstore/controller/UpdateBookDTO.java:3-33` |
-| Category matching and list behavior | `src/main/java/com/bookstore/service/BookService.java:23-78` |
-| Creation, update, and category resolution | `src/main/java/com/bookstore/service/BookService.java:81-147` |
-| Lookup order and ID comparison defect | `src/main/java/com/bookstore/service/BookService.java:149-175` |
-| Category vocabulary | `src/main/java/com/bookstore/model/Category.java:10-19` |
-| Existing create-path test | `src/test/java/com/bookstore/controller/BookControllerTest.java:18-84` |
+No book deletion, metadata editing, reservation protection, immutable audit
+history, financial processing, or identity system was added.

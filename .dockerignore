@@ -1,0 +1,9 @@
+.git
+.agents
+.github
+.specify
+.vscode
+**/bin
+**/obj
+**/TestResults
+artifacts

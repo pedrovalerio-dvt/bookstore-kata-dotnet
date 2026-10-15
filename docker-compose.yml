@@ -4,23 +4,33 @@ services:
       context: .
       dockerfile: Dockerfile
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     environment:
-      MONGODB_URI: mongodb://mongodb:27017
+      ASPNETCORE_HTTP_PORTS: "8080"
+      Mongo__ConnectionString: mongodb://mongodb:27017
+      Mongo__DatabaseName: bookstore
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks:
       - bookstore-network
 
   mongodb:
-    image: mongo:7.0
+    image: mongo:7.0.28-jammy
     environment:
       MONGO_INITDB_DATABASE: bookstore
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongodb-data:/data/db
       - ./mongo-init/01-init-bookstore.js:/docker-entrypoint-initdb.d/01-init-bookstore.js:ro
+      - ./mongo-init/02-index-books.js:/docker-entrypoint-initdb.d/02-index-books.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     networks:
       - bookstore-network
 
@@ -30,4 +40,3 @@ networks:
 
 volumes:
   mongodb-data:
-
