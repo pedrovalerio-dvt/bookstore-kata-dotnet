@@ -8,6 +8,11 @@ public sealed class CreateBookValidator : AbstractValidator<CreateBookRequest>
     {
         RuleFor(request => request.Title).NotEmpty();
         RuleFor(request => request.Quantity).GreaterThanOrEqualTo(0);
+        RuleFor(request => request.AuthorId).Must(BookIdentifier.IsValid)
+            .When(request => request.AuthorId is not null)
+            .WithMessage("AuthorId must contain exactly 24 hexadecimal characters.");
+        RuleFor(request => request).Must(request => request.AuthorId is null || request.Author is null)
+            .WithMessage("Supply authorId or author text, not both.");
         RuleFor(request => request.CategoryId)
             .Must(category => category is null || Categories.FindId(category) is not null)
             .WithMessage("CategoryId must be an exact category name or null.");
@@ -41,6 +46,8 @@ public sealed class BookQueryValidator : AbstractValidator<BookQuery>
         RuleFor(request => request.Name).NotEmpty().When(request => request.Name is not null);
         RuleFor(request => request.Author).Null()
             .WithMessage("Use the books collection endpoint to search by author.");
+        RuleFor(request => request.AuthorId).Null()
+            .WithMessage("Use the books collection endpoint to filter by authorId.");
     }
 }
 

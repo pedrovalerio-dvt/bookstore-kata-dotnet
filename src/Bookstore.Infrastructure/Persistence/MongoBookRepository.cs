@@ -10,8 +10,16 @@ public sealed class MongoBookRepository(IMongoDatabase database) : IBookReposito
     private readonly IMongoCollection<BsonDocument> _books = database.GetCollection<BsonDocument>("books");
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<Book>> ListAsync(
+    public Task<IReadOnlyList<Book>> ListAsync(
         int? categoryId, string? author, CancellationToken cancellationToken)
+        => ListFilteredAsync(categoryId, author, null, cancellationToken);
+
+    public Task<IReadOnlyList<Book>> ListByAuthorIdAsync(
+        int? categoryId, string? author, string authorId, CancellationToken cancellationToken) =>
+        ListFilteredAsync(categoryId, author, authorId, cancellationToken);
+
+    private async Task<IReadOnlyList<Book>> ListFilteredAsync(
+        int? categoryId, string? author, string? authorId, CancellationToken cancellationToken)
     {
         var filter = categoryId is null
             ? Builders<BsonDocument>.Filter.Empty
@@ -22,6 +30,8 @@ public sealed class MongoBookRepository(IMongoDatabase database) : IBookReposito
             filter &= Builders<BsonDocument>.Filter.Regex(
                 "author", new BsonRegularExpression(Regex.Escape(author), "i"));
         }
+        if (authorId is not null)
+            filter &= Builders<BsonDocument>.Filter.Eq("authorId", ObjectId.Parse(authorId));
         var documents = await _books.Find(filter).ToListAsync(cancellationToken);
         return documents.Select(Map).ToArray();
     }
@@ -37,7 +47,13 @@ public sealed class MongoBookRepository(IMongoDatabase database) : IBookReposito
 
     public async Task<Book> InsertAsync(Book book, CancellationToken cancellationToken)
     {
-        var id = ObjectId.GenerateNewId();
+        var document = CreateDocument(book, ObjectId.GenerateNewId());
+        await _books.InsertOneAsync(document, cancellationToken: cancellationToken);
+        return Map(document);
+    }
+
+    internal static BsonDocument CreateDocument(Book book, ObjectId id)
+    {
         var document = new BsonDocument
         {
             ["_id"] = id,
@@ -52,8 +68,9 @@ public sealed class MongoBookRepository(IMongoDatabase database) : IBookReposito
             ["publisher"] = Text(book.Publisher),
             ["publisherDate"] = Date(book.PublisherDate)
         };
-        await _books.InsertOneAsync(document, cancellationToken: cancellationToken);
-        return Map(document);
+        if (book.AuthorId is not null)
+            document["authorId"] = ObjectId.Parse(book.AuthorId);
+        return document;
     }
 
     public async Task<Book?> UpdateInventoryAsync(
@@ -69,7 +86,7 @@ public sealed class MongoBookRepository(IMongoDatabase database) : IBookReposito
         return document is null ? null : Map(document);
     }
 
-    private static Book Map(BsonDocument document) => new(
+    internal static Book Map(BsonDocument document) => new(
         document["_id"].AsObjectId.ToString(),
         ReadText(document, "title"), ReadText(document, "author"),
         document.GetValue("categoryId", 0).IsBsonNull ? 0 : document.GetValue("categoryId", 0).AsInt32,
@@ -77,7 +94,9 @@ public sealed class MongoBookRepository(IMongoDatabase database) : IBookReposito
         ReadText(document, "description"), ReadText(document, "language"),
         !document.GetValue("active", false).IsBsonNull && document.GetValue("active", false).AsBoolean,
         ReadDate(document, "inactiveDate"), ReadText(document, "publisher"),
-        ReadDate(document, "publisherDate"));
+        ReadDate(document, "publisherDate"),
+        document.TryGetValue("authorId", out var authorId) && !authorId.IsBsonNull
+            ? authorId.AsObjectId.ToString() : null);
 
     private static string? ReadText(BsonDocument document, string key) =>
         document.TryGetValue(key, out var value) && !value.IsBsonNull ? value.AsString : null;

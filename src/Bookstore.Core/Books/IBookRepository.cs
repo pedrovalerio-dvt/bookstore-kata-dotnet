@@ -8,6 +8,9 @@ public interface IBookRepository
     /// <param name="cancellationToken">Cancellation propagated to database I/O.</param>
     /// <returns>All matching books; an empty collection when no books match.</returns>
     Task<IReadOnlyList<Book>> ListAsync(int? categoryId, string? author, CancellationToken cancellationToken);
+    /// <summary>Lists exact Author-identity matches satisfying every supplied text/category filter.</summary>
+    Task<IReadOnlyList<Book>> ListByAuthorIdAsync(
+        int? categoryId, string? author, string authorId, CancellationToken cancellationToken);
     Task<Book?> FindAsync(BookQuery query, CancellationToken cancellationToken);
     Task<Book> InsertAsync(Book book, CancellationToken cancellationToken);
     Task<Book?> UpdateInventoryAsync(

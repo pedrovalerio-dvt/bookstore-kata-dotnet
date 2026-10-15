@@ -10,7 +10,7 @@ public sealed class BookServiceTests
 
     private BookService CreateService() => new(
         _repository.Object, new CreateBookValidator(), new UpdateBookValidator(),
-        new BookQueryValidator(), new FixedTimeProvider());
+        new BookQueryValidator(), new FixedTimeProvider(), Mock.Of<IAuthorBookCoordinator>());
 
     [Theory]
     [InlineData(null, null)]

@@ -290,7 +290,7 @@ public sealed class BookEndpointsTests
         using var document = JsonDocument.Parse(await client.GetStringAsync("/openapi/v1.json"));
         var root = document.RootElement;
         Assert.StartsWith("3.", root.GetProperty("openapi").GetString());
-        Assert.Equal("1.1.0", root.GetProperty("info").GetProperty("version").GetString());
+        Assert.Equal("1.2.0", root.GetProperty("info").GetProperty("version").GetString());
         var paths = root.GetProperty("paths");
         var books = paths.EnumerateObject().Single(path => path.Name.TrimEnd('/') == "/api/books").Value;
         Assert.True(books.TryGetProperty("get", out _));

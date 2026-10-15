@@ -9,7 +9,8 @@ using Microsoft.Extensions.Configuration;
 namespace Bookstore.Tests.Persistence;
 
 [Trait("Category", "Database")]
-public sealed class BookWorkflowTests(MongoFixture fixture) : IClassFixture<MongoFixture>
+[Collection("MongoDB")]
+public sealed class BookWorkflowTests(MongoFixture fixture)
 {
     [Fact]
     public async Task WorkflowAsync_RealMongoDatabase_CreatesFindsFiltersAndUpdatesBook()

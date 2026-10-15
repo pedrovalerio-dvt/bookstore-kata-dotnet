@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Text.Json.Serialization;
+using Bookstore.Api.Authors;
 using Bookstore.Api.Books;
 using Bookstore.Api.Errors;
 using Bookstore.Api.OpenApi;
 using Bookstore.Core.Books;
+using Bookstore.Core.Authors;
 using Bookstore.Infrastructure;
 using FluentValidation;
 using Microsoft.AspNetCore.Http.Json;
@@ -52,11 +54,11 @@ builder.Services.AddOpenApi(options =>
                     Description = "Trace identifier correlating the response, Problem Details, and JSON logs.",
                     Schema = new Microsoft.OpenApi.OpenApiSchema { Type = Microsoft.OpenApi.JsonSchemaType.String }
                 };
-                if (operation.OperationId == "CreateBook" && status == "201")
+                if (operation.OperationId is "CreateBook" or "CreateAuthor" && status == "201")
                 {
                     concrete.Headers["Location"] = new Microsoft.OpenApi.OpenApiHeader
                     {
-                        Description = "Lookup URL for the created book.",
+                        Description = "Lookup URL for the created resource.",
                         Schema = new Microsoft.OpenApi.OpenApiSchema { Type = Microsoft.OpenApi.JsonSchemaType.String }
                     };
                 }
@@ -67,13 +69,14 @@ builder.Services.AddOpenApi(options =>
     options.AddDocumentTransformer((document, _, _) =>
     {
         document.Info.Title = "Bookstore API";
-        document.Info.Version = "1.1.0";
+        document.Info.Version = "1.2.0";
         document.Info.Description =
             "MongoDB-backed .NET 10 API. No application authentication is configured. " +
             "Errors use Problem Details with a trace instance and X-Trace-Id header. " +
             "Dates are ISO 8601 date-times. Null response properties are omitted. " +
             "Category names are case-sensitive: Fiction, Non-Fiction, Science, Biography, Children, Programming. " +
-            "Collection author search uses a case-insensitive literal substring and can be combined with category.";
+            "Collection author search uses a case-insensitive literal substring and can be combined with category or authorId. " +
+            "Managed Author profiles require deployment access protection; soft deletion preserves linked books.";
         document.Servers = [new Microsoft.OpenApi.OpenApiServer { Url = "/" }];
         return Task.CompletedTask;
     });
@@ -84,6 +87,7 @@ builder.Services.AddScoped<IValidator<CreateBookRequest>, CreateBookValidator>()
 builder.Services.AddScoped<IValidator<UpdateBookRequest>, UpdateBookValidator>();
 builder.Services.AddScoped<IValidator<BookQuery>, BookQueryValidator>();
 builder.Services.AddScoped<BookService>();
+builder.Services.AddScoped<AuthorService>();
 
 var app = builder.Build();
 app.Use(async (context, next) =>
@@ -103,6 +107,7 @@ app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.MapBookEndpoints();
+app.MapAuthorEndpoints();
 app.MapOpenApi();
 if (app.Environment.IsDevelopment())
 {

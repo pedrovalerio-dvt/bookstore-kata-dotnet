@@ -6,8 +6,9 @@ info:
     Details with a trace instance and X-Trace-Id header. Dates are ISO 8601 date-times. Null response
     properties are omitted. Category names are case-sensitive: Fiction, Non-Fiction, Science, Biography,
     Children, Programming. Collection author search uses a case-insensitive literal substring and can
-    be combined with category.'
-  version: 1.1.0
+    be combined with category or authorId. Managed Author profiles require deployment access protection;
+    soft deletion preserves linked books.'
+  version: 1.2.0
 servers:
 - url: /
 paths:
@@ -15,11 +16,12 @@ paths:
     get:
       tags:
       - Books
-      summary: List books by optional category and partial author name.
-      description: Author is a case-insensitive literal substring and is not trimmed; blank input returns
-        400. Author and exact category filters combine with AND. Missing filters list all books, including
-        inactive ones. Null/missing authors do not match an author search. Unknown or empty category returns
-        400. No matches returns an empty array. No pagination or guaranteed ordering.
+      summary: List books by optional category, author text, and Author ID.
+      description: authorId is exact identity; author is a case-insensitive literal substring and is not
+        trimmed. All supplied filters combine with AND. Invalid IDs, blank author text, and unknown/empty
+        category return 400. Missing filters list all books, including inactive ones. Null/missing authors
+        do not match an author text search. No matches returns an empty array. Inactive Authors' books
+        remain visible. No pagination or guaranteed ordering.
       operationId: ListBooks
       parameters:
       - name: category
@@ -30,6 +32,11 @@ paths:
       - name: author
         in: query
         description: Optional nonblank, case-insensitive literal author substring. Whitespace is not trimmed.
+        schema:
+          type: string
+      - name: authorId
+        in: query
+        description: Optional exact managed Author ID; all supplied filters combine with AND.
         schema:
           type: string
       responses:
@@ -72,8 +79,10 @@ paths:
       tags:
       - Books
       summary: Create a book; categoryId accepts an exact category name.
-      description: Requires a nonblank title and nonnegative quantity. Unknown categories return 400.
-        Inactive creation without a date uses server UTC time.
+      description: Requires a nonblank title and nonnegative quantity. Supply author text or authorId,
+        not both. Managed links snapshot the active Author name transactionally; unknown Author returns
+        404 and inactive Author returns 409. Unknown categories return 400. Inactive creation without
+        a date uses server UTC time.
       operationId: CreateBook
       requestBody:
         content:
@@ -90,7 +99,7 @@ paths:
               schema:
                 type: string
             Location:
-              description: Lookup URL for the created book.
+              description: Lookup URL for the created resource.
               schema:
                 type: string
           content:
@@ -99,6 +108,28 @@ paths:
                 $ref: '#/components/schemas/Book'
         '400':
           description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Conflict
           headers:
             X-Trace-Id:
               description: Trace identifier correlating the response, Problem Details, and JSON logs.
@@ -204,8 +235,8 @@ paths:
       tags:
       - Books
       summary: Find a book by exactly one of id or exact title.
-      description: Supply exactly one of id or name. Author filtering on this single-book route returns
-        400; use GET /api/books?author=... for collection search.
+      description: Supply exactly one of id or name. Author text or authorId filtering on this single-book
+        route returns 400; use the collection endpoint for author searches.
       operationId: GetBook
       parameters:
       - name: id
@@ -217,6 +248,10 @@ paths:
         schema:
           type: string
       - name: author
+        in: query
+        schema:
+          type: string
+      - name: authorId
         in: query
         schema:
           type: string
@@ -279,8 +314,261 @@ paths:
               description: Trace identifier correlating the response, Problem Details, and JSON logs.
               schema:
                 type: string
+  /api/authors:
+    post:
+      tags:
+      - Authors
+      summary: Create a managed Author; duplicate names are allowed.
+      description: Requires a nonblank name of at most 255 characters. Profile access is deployment-protected;
+        the application does not configure authentication.
+      operationId: CreateAuthor
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAuthorRequest'
+        required: true
+      responses:
+        '201':
+          description: Created
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+            Location:
+              description: Lookup URL for the created resource.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Author'
+        '400':
+          description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '415':
+          description: Unsupported Media Type
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    get:
+      tags:
+      - Authors
+      summary: List active Authors; optionally include inactive profiles.
+      description: includeInactive defaults to false. No pagination or ordering guarantee. Empty results
+        return [].
+      operationId: ListAuthors
+      parameters:
+      - name: includeInactive
+        in: query
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: OK
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Author'
+        '400':
+          description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/authors/{id}:
+    get:
+      tags:
+      - Authors
+      summary: Get an Author by ID, including inactive profiles.
+      operationId: GetAuthor
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Author'
+        '400':
+          description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    delete:
+      tags:
+      - Authors
+      summary: Soft-delete an Author without changing linked books.
+      description: Repeated retirement returns 204 without changing updatedAt. New links are rejected
+        transactionally; this is not privacy erasure.
+      operationId: DeactivateAuthor
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: No Content
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+        '400':
+          description: Bad Request
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          headers:
+            X-Trace-Id:
+              description: Trace identifier correlating the response, Problem Details, and JSON logs.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
 components:
   schemas:
+    Author:
+      required:
+      - id
+      - name
+      - active
+      - createdAt
+      - updatedAt
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        birthDate:
+          type: string
+          format: date
+          nullable: true
+        nationality:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     Book:
       required:
       - id
@@ -322,6 +610,32 @@ components:
           type: string
           format: date-time
           nullable: true
+        authorId:
+          type: string
+          nullable: true
+    CreateAuthorRequest:
+      required:
+      - name
+      type: object
+      properties:
+        name:
+          maxLength: 255
+          type: string
+          description: Nonblank name; names need not be unique.
+        birthDate:
+          type: string
+          description: Calendar date in YYYY-MM-DD format.
+          format: date
+          nullable: true
+        nationality:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+          default: true
     CreateBookRequest:
       required:
       - title
@@ -366,6 +680,11 @@ components:
           type: string
           format: date-time
           nullable: true
+        authorId:
+          pattern: ^[0-9a-fA-F]{24}$
+          type: string
+          description: Optional managed Author ID; cannot be supplied with author text.
+          nullable: true
     ProblemDetails:
       required:
       - type
@@ -409,3 +728,4 @@ components:
           description: False stamps inactiveDate with server time; true clears it.
 tags:
 - name: Books
+- name: Authors

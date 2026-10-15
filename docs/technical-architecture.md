@@ -5,10 +5,10 @@
 ```text
 HTTP consumer (no frontend source in this repository)
   -> ASP.NET Core .NET 10 / grouped Minimal APIs
-     -> BookService + FluentValidation (Bookstore.Core)
-        -> IBookRepository
-           -> async MongoBookRepository (Bookstore.Infrastructure)
-              -> MongoDB bookstore.books
+     -> BookService / AuthorService + domain lifecycle and validation (Core)
+        -> IBookRepository / IAuthorRepository / IAuthorBookCoordinator
+           -> BSON repositories and transactional coordinator (Infrastructure)
+              -> replica-set MongoDB bookstore.books + bookstore.authors
 ```
 
 The Java/Jersey/Maven runtime has been replaced by a .NET 10 solution.
@@ -18,8 +18,10 @@ owns immutable book contracts, validation, category vocabulary, and operations;
 Core has no ASP.NET or MongoDB dependency. Tests use dependency substitution,
 not alternate production persistence behavior.
 
-The Book is the single-record consistency boundary. There are no monetary
-values, payments, distributed transactions, event consumers, or audit/event
+Book inventory and Author lifecycle have separate aggregate boundaries.
+Managed linking introduces cross-document MongoDB transactions with a shared
+Author guard to serialize links against retirement. There are no monetary
+values, payments, external distributed services, event consumers, or audit/event
 store requirements in the current operations. No event bus or unconsumed
 domain-event abstraction was added. This is a deliberately small layered
 design, not a claim of a complete retail DDD model or regulatory certification.
@@ -34,6 +36,11 @@ design, not a claim of a complete retail DDD model or regulatory certification.
 | `global.json` | .NET 10 SDK selection and feature-band roll-forward |
 | `src/Bookstore.Api/Program.cs` | DI, logging, errors, tracing, OpenAPI, host |
 | `src/Bookstore.Api/Books/BookEndpoints.cs` | Five existing business/liveness routes |
+| `src/Bookstore.Api/Authors/AuthorEndpoints.cs` | Author creation, directory, lookup, soft deletion; post-commit ID-only logs |
+| `src/Bookstore.Core/Authors` | Immutable Author lifecycle, profile contracts/validation, service, repository boundary |
+| `src/Bookstore.Core/Books/IAuthorBookCoordinator.cs` | Transaction-neutral linked-creation contract |
+| `src/Bookstore.Infrastructure/Persistence/MongoAuthorRepository.cs` | Author BSON persistence and transactional retirement |
+| `src/Bookstore.Infrastructure/Persistence/MongoAuthorBookCoordinator.cs` | Guarded active-Author write and Book insert in one transaction |
 | `src/Bookstore.Api/Errors/ApiExceptionHandler.cs` | Validation/binding/unexpected exception mapping |
 | `src/Bookstore.Core/Books/Book.cs` | Immutable book record |
 | `src/Bookstore.Core/Books/BookContracts.cs` | Primary-constructor DTOs and immutable category vocabulary |
@@ -48,6 +55,9 @@ design, not a claim of a complete retail DDD model or regulatory certification.
 | `mongo-init` | Legacy category seeds and new idempotent book indexes |
 | `docs/legacy` | Historical Java documentation from commit `cebc7fb` |
 | `specs/001-search-by-author` | Approved feature specification, release task breakdown, and QA checklist |
+| `specs/002-author-support` | Author management specification, design, executed tasks, release evidence, and QA plan |
+| `scripts/Link-LegacyAuthors.ps1`, `scripts/link-legacy-authors.js` | Protected, reviewed, resumable legacy association maintenance |
+| `scripts/mongodb-bootstrap.js`, `scripts/mongodb-health.js` | Local replica initialization and writable-primary health |
 
 Java source and Maven configuration have been removed rather than maintained as
 a second runnable stack. Historical source remains in Git at `cebc7fb`.
@@ -59,14 +69,18 @@ Trailing-slash variants are accepted by ASP.NET routing.
 
 | Method and route | Successful result | Expected error results |
 |---|---|---|
-| `GET /api/books?category=...&author=...` (both optional) | 200, array | 400 invalid category or blank author; 500 unexpected failure |
+| `GET /api/books?category=...&author=...&authorId=...` (all optional) | 200, array | 400 invalid filters; 500 unexpected failure |
 | `GET /api/books/single?id=...` or `?name=...` | 200, Book | 400 invalid/ambiguous/unsupported filter; 404 absent; 500 failure |
-| `POST /api/books` | 201, Book and Location | 400 validation/binding; 415 media type; 500 failure |
+| `POST /api/books` | 201, Book and Location | 400 validation/binding; 404 unknown Author; 409 inactive Author; 415 media type; 500 failure |
 | `PUT /api/books` | 200, complete Book | 400 validation/binding; 404 absent; 415 media type; 500 failure |
 | `GET /api/books/health` | Empty 200 | Liveness only |
+| `POST /api/authors` | 201, Author and Location | 400 validation/binding; 415 media type; 500 failure |
+| `GET /api/authors?includeInactive=...` | 200, array | 400 invalid switch; 500 failure |
+| `GET /api/authors/{id}` | 200, active/inactive Author | 400 malformed ID; 404 absent; 500 failure |
+| `DELETE /api/authors/{id}` | Empty 204, including repeated retirement | 400 malformed ID; 404 absent; 500 failure |
 
 Collection author search uses a case-insensitive literal substring. The
-single-book route remains ID/title-only. There is no DELETE route. Routing failures such as
+single-book route remains ID/title-only. There is no Book DELETE route. Routing failures such as
 404 and 405 also use status-code Problem Details. Framework and proxy errors
 outside the application, such as a disconnected socket, are not a JSON contract.
 No upstream HTTP service exists; MongoDB uses its own wire protocol.
@@ -85,7 +99,7 @@ in operation descriptions and covered by tests.
 ### Connection lifetime and asynchronous I/O
 
 A single `IMongoClient` is registered as a DI-owned singleton and disposed with
-the application. `IMongoDatabase` is shared, and repositories and BookService
+the application. `IMongoDatabase` is shared, and repositories, services, and coordinator
 are scoped. This replaces a new synchronous client for every operation and
 normal-path-only manual disposal. Driver calls are awaited and receive the
 request CancellationToken. No blocking `.Result`, `.Wait`, or `async void` is
@@ -136,7 +150,53 @@ The [approved feature](../specs/001-search-by-author/spec.md),
 [QA checklist](../specs/001-search-by-author/checklists/qa.md) record scope,
 implementation tasks, automated evidence, rollout, and manual acceptance.
 
-### Atomic updates and accurate outcomes
+### Managed Author identity and transactional lifecycle
+
+`Author` is immutable, owns creation/deactivation rules, and uses server-provided
+time. Name is not a unique key. JSON uses one string `id` backed by BSON `_id`;
+birth date maps DateOnly to UTC-midnight BSON date and `YYYY-MM-DD` JSON.
+`createdAt`/`updatedAt` are UTC instants with BSON millisecond precision.
+Optional profile fields are omitted when null. The internal Int64 `linkRevision`
+never appears in API responses.
+
+`AuthorService` validates IDs and delegates persistence through `IAuthorRepository`.
+`BookService` validates mutually exclusive `author`/`authorId`, then uses
+`IAuthorBookCoordinator` for managed links. `ListByAuthorIdAsync` adds ObjectId
+equality to category/escaped-text predicates. All supplied filters combine with
+AND. Unlinked legacy reads and stock updates retain their previous behavior.
+The additive `authorId` index serves exact identity queries; no name/email
+uniqueness or automatic profile creation is introduced.
+
+Linked creation starts a driver session and runs `WithTransactionAsync` using
+snapshot reads, primary read preference, majority writes, and cancellation.
+It conditionally increments `linkRevision` on `{_id, active:true}`, resolves the
+name, then inserts the Book in the same transaction. The Book ID is allocated
+outside the callback so transient retries do not create extra identities.
+Retirement reads the profile, applies domain deactivation, and writes that
+same Author document inside its transaction. MongoDB write conflicts force
+the losing transaction to retry against the committed state. A read-only
+transaction or no-op guard would not prevent stale-read write skew.
+
+If retirement commits first, linking returns 409; if linking commits first,
+retirement preserves that Book. A missing Author returns 404. Failed inserts
+roll back the guard revision. Repeated retirement preserves updatedAt.
+Guard writes do not change profile timestamps. No operations run in parallel
+on a session and no external side effects run in retryable callbacks.
+
+Successful creation/deactivation logs contain Author IDs, not profile objects;
+they are emitted after persistence commits. Safe validation messages avoid
+interpolating email or profile values into response details or warning logs.
+These logs are not a durable audit ledger and no domain-event bus is claimed.
+Deployment must protect all Author endpoints; soft deletion is not erasure.
+
+Reviewed linking runs through a protected mongosh maintenance script, not a
+public endpoint or startup hook. Each manifest entry validates the expected
+credit and missing association, guards the active Author, and conditionally
+updates the Book in one transaction. Original credits and unrelated metadata
+remain unchanged. Dry-run does not write; partial runs are resumable and
+already-identical links skip. See the [operations runbook](author-operations.md).
+
+### Atomic book updates and accurate outcomes
 
 `FindOneAndUpdateAsync` modifies quantity, active, and inactiveDate and returns
 `ReturnDocument.After`. It does not set immutable `_id`, does not upsert, and
@@ -196,21 +256,27 @@ itself is not required to serve liveness or OpenAPI.
 
 The Dockerfile restores centrally managed dependencies, publishes the .NET
 application in a build image, and runs it as the .NET image's non-root user.
-Compose uses MongoDB `7.0.28-jammy`, waits for its ping healthcheck, preserves
-the named data volume, and binds host ports to loopback. The pinned image is
+Compose uses MongoDB `7.0.28-jammy` as a single-member `rs0` replica set, waits
+for writable-primary health and successful bootstrap, preserves the named
+data volume, and binds host ports to loopback. The pinned image is
 also used by Testcontainers. Update the pin through normal dependency
 maintenance rather than trusting an untracked mutable local image.
 
-Initialization scripts run automatically only on a fresh MongoDB data
-directory. **For an existing volume**, apply the new indexes without deleting
-data:
+The bootstrap service initializes only an uninitialized replica set and
+rejects an unexpected existing topology instead of reconfiguring it. It seeds
+categories only when that collection is absent, then applies idempotent indexes
+on both fresh and existing volumes. To reapply the indexes manually:
 
 ```powershell
-docker compose exec mongodb mongosh --quiet --file /docker-entrypoint-initdb.d/02-index-books.js
+docker compose run --rm mongodb-bootstrap
 ```
 
-The script is idempotent for matching index definitions. Inspect any conflicts
-instead of dropping existing indexes automatically.
+The command runs the mounted bootstrap and index scripts.
+The old `/docker-entrypoint-initdb.d` mount is no longer
+used. Inspect conflicting indexes instead of dropping them automatically.
+See [Author operations](author-operations.md) for standalone conversion,
+backup/restore, host URI, and rollback instructions. A one-node replica set
+supports transactions but is not a production high-availability topology.
 
 This Compose file is for local development. It does not configure production
 MongoDB credentials, TLS, ingress, backups, or an identity provider. Use managed
@@ -253,9 +319,18 @@ No immutable business audit log is implemented.
 
 `Http/BookstoreFactory.cs`, `Persistence/MongoFixture.cs`, and `TestBook.cs`
 provide fixtures, dependency substitution, and representative test data.
-Each Testcontainers fixture owns its container and disposes it; tests use
+One xUnit collection fixture owns a replica-set container and disposes it; tests use
 uniquely named disposable databases, not the configured local bookstore.
 Test names follow `MethodName_Condition_ExpectedResult`.
+
+New Author test classes cover lifecycle/validation, service forwarding,
+HTTP contracts/errors, BSON persistence, managed identity filtering, the full
+HTTP workflow, and actual maintenance-script execution.
+`AuthorBookConcurrencyTests` holds a real transaction with command-event barriers,
+waits for MongoDB write conflict code 112, and then releases the winning commit.
+Both orderings and guarded-write rollback are exercised without sleep-based races.
+Mapping tests cover dry-run, literal legacy credit preservation, validation,
+inactive/missing targets, write rollback, and partial-run resumption.
 
 The Java baseline had one mocked create-controller test and no demonstrated
 coverage threshold. The .NET tests include success, invalid input, not-found,
@@ -271,8 +346,9 @@ report, not an assumption based on test count.
 
 The migration verification run passed **110 tests, with no skipped tests**:
 
-These are historical migration figures for `bdfddf6`. Current author-search
-release results are recorded in the linked release specification.
+These are historical migration figures for `bdfddf6`. Author search results are
+recorded in its release specification; current Author management results are in
+the [Author Support release](../specs/002-author-support/release.md).
 
 | Coverage scope | Measured line coverage |
 |---|---|

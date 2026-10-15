@@ -16,14 +16,17 @@ public sealed record CreateBookRequest(
     [property: Description("UTC date-time; inactive creation defaults to server time if omitted.")]
     DateTimeOffset? InactiveDate = null,
     string? Publisher = null,
-    DateTimeOffset? PublisherDate = null);
+    DateTimeOffset? PublisherDate = null,
+    [property: RegularExpression("^[0-9a-fA-F]{24}$"),
+        Description("Optional managed Author ID; cannot be supplied with author text.")]
+    string? AuthorId = null);
 
 public sealed record UpdateBookRequest(
     [property: Required, RegularExpression("^[0-9a-fA-F]{24}$")] string? Id,
     [property: Required, Range(0, int.MaxValue)] int? Quantity,
     [property: Required, Description("False stamps inactiveDate with server time; true clears it.")] bool? Active);
 
-public sealed record BookQuery(string? Id, string? Name, string? Author = null);
+public sealed record BookQuery(string? Id, string? Name, string? Author = null, string? AuthorId = null);
 
 public sealed record Category(int Id, string Name);
 

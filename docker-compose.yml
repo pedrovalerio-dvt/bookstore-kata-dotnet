@@ -6,9 +6,11 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+      mongodb-bootstrap:
+        condition: service_completed_successfully
     environment:
       ASPNETCORE_HTTP_PORTS: "8080"
-      Mongo__ConnectionString: mongodb://mongodb:27017
+      Mongo__ConnectionString: mongodb://mongodb:27017/?replicaSet=rs0
       Mongo__DatabaseName: bookstore
     ports:
       - "127.0.0.1:8080:8080"
@@ -17,20 +19,45 @@ services:
 
   mongodb:
     image: mongo:7.0.28-jammy
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     environment:
       MONGO_INITDB_DATABASE: bookstore
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongodb-data:/data/db
-      - ./mongo-init/01-init-bookstore.js:/docker-entrypoint-initdb.d/01-init-bookstore.js:ro
-      - ./mongo-init/02-index-books.js:/docker-entrypoint-initdb.d/02-index-books.js:ro
+      - ./scripts/mongodb-health.js:/opt/bookstore/mongodb-health.js:ro
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"]
+      test: ["CMD", "mongosh", "mongodb://127.0.0.1:27017/?directConnection=true", "--quiet", "--file", "/opt/bookstore/mongodb-health.js"]
       interval: 5s
       timeout: 5s
-      retries: 12
+      retries: 30
       start_period: 10s
+    networks:
+      - bookstore-network
+
+  mongodb-bootstrap:
+    image: mongo:7.0.28-jammy
+    depends_on:
+      mongodb:
+        condition: service_started
+    entrypoint: ["bash", "-c"]
+    command:
+      - >-
+        for attempt in {1..120}; do
+          if mongosh 'mongodb://mongodb:27017/?directConnection=true&serverSelectionTimeoutMS=2000' --quiet --eval 'quit(db.adminCommand({ping:1}).ok === 1 ? 0 : 1)' >/dev/null 2>&1; then
+            exec mongosh 'mongodb://mongodb:27017/?directConnection=true&serverSelectionTimeoutMS=2000' --quiet --file /opt/bookstore/mongodb-bootstrap.js;
+          fi;
+          sleep 1;
+        done;
+        echo 'Bootstrap timed out waiting for MongoDB.' >&2;
+        exit 1
+    volumes:
+      - ./scripts/mongodb-bootstrap.js:/opt/bookstore/mongodb-bootstrap.js:ro
+      - ./mongo-init/01-init-bookstore.js:/opt/bookstore/01-init-bookstore.js:ro
+      - ./mongo-init/02-index-books.js:/opt/bookstore/02-index-books.js:ro
+      - ./mongo-init/03-index-authors.js:/opt/bookstore/03-index-authors.js:ro
+    restart: "no"
     networks:
       - bookstore-network
 

@@ -2,8 +2,9 @@
 
 Book catalogue and inventory API using .NET 10 Minimal APIs and MongoDB.
 Create books, find by ID or exact title, search by partial author name,
-filter by category, and update stock
-and active status. Existing MongoDB ObjectIds and document field names are retained.
+filter by category or managed Author ID, and update stock and active status.
+Create, list, retrieve, and soft-delete managed Author profiles.
+Existing MongoDB ObjectIds and document field names are retained.
 
 ## Prerequisites
 
@@ -25,15 +26,17 @@ not an authenticated production topology.
 For local .NET execution with only MongoDB in Docker:
 
 ```powershell
-docker compose up -d mongodb
+docker compose up -d mongodb mongodb-bootstrap
 $env:ASPNETCORE_ENVIRONMENT = "Development"
-$env:Mongo__ConnectionString = "mongodb://localhost:27017"
+$env:Mongo__ConnectionString = "mongodb://localhost:27017/?directConnection=true&replicaSet=rs0"
 dotnet run --project .\src\Bookstore.Api -- --urls http://localhost:8080
 ```
 
 `Mongo__DatabaseName` defaults to `bookstore`. Connection strings must not be
 committed with credentials. Existing databases require the idempotent index
-script described in the architecture document.
+scripts described in the [Author operations runbook](docs/author-operations.md).
+Author linking requires replica-set MongoDB; standalone mode cannot provide
+the required transaction guarantees. Local Compose uses one member, not high availability.
 
 ## API documentation
 
@@ -47,6 +50,9 @@ script described in the architecture document.
 - [Historical Java baseline](docs/legacy/technical-architecture.md).
 - [Search by Author release specification](specs/001-search-by-author/release.md)
   and [QA checklist](specs/001-search-by-author/checklists/qa.md).
+- [Author Support release specification](specs/002-author-support/release.md),
+  [QA checklist](specs/002-author-support/checklists/qa.md), and
+  [deployment/legacy-linking runbook](docs/author-operations.md).
 
 No staging endpoint is configured in this repository.
 
@@ -54,6 +60,13 @@ Author search example: `GET /api/books?author=beck&category=Programming`.
 Author matching is a case-insensitive literal substring; both filters must
 match when combined. Blank author input returns `400`; no matches returns `[]`.
 The single-book route still accepts only ID or exact title.
+
+Managed Authors use `/api/authors` and `/api/authors/{id}`. Create a linked book
+with `authorId` instead of free-text `author`, and query it with
+`GET /api/books?authorId=<id>`. Namesakes remain separate identities.
+Soft deletion prevents new links but preserves existing books and profiles.
+Birth date and email are profile data: all Author endpoints require approved
+deployment access protection; no application identity provider is configured.
 
 ## Testing and coverage
 
@@ -82,14 +95,16 @@ That focused command is not a full coverage-policy check.
 OpenAPI, and JSON Serilog logging with trace correlation. `Bookstore.Core`
 contains immutable contracts, FluentValidation rules, and testable book
 operations. `Bookstore.Infrastructure` implements async MongoDB queries and
-atomic inventory updates behind `IBookRepository`, using one DI-owned client.
+atomic inventory updates behind repository interfaces, using one DI-owned client.
+Author linking and retirement contend on the same Author document inside
+MongoDB transactions, preventing stale active-state checks.
 The MongoDB driver is retained instead of EF Core because existing BSON data
 and MongoDB behavior must be preserved; no relational ORM is required.
 
 The migration intentionally fixes legacy defects and changes invalid-input
 responses and update success status. Review the compatibility table before
-upgrading a consumer. There is no frontend, authentication provider, delete
-operation, or financial transaction model.
+upgrading a consumer. There is no frontend, authentication provider, book deletion,
+or financial transaction model. Author deletion is soft deletion only.
 
 ## Maintainers
 

@@ -1,3 +1,4 @@
+using Bookstore.Core.Authors;
 using Bookstore.Core.Books;
 using Bookstore.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
@@ -38,6 +39,8 @@ public static class DependencyInjection
         services.AddSingleton(provider => provider.GetRequiredService<IMongoClient>().GetDatabase(
             provider.GetRequiredService<IOptions<MongoOptions>>().Value.DatabaseName));
         services.AddScoped<IBookRepository, MongoBookRepository>();
+        services.AddScoped<IAuthorRepository, MongoAuthorRepository>();
+        services.AddScoped<IAuthorBookCoordinator, MongoAuthorBookCoordinator>();
         return services;
     }
 }

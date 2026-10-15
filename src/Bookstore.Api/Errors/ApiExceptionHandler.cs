@@ -1,4 +1,5 @@
 using FluentValidation;
+using Bookstore.Core.Authors;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,6 +14,8 @@ public sealed class ApiExceptionHandler(
     {
         var (status, title, detail) = exception switch
         {
+            AuthorNotFoundException => (404, "Author not found", "The referenced Author does not exist."),
+            AuthorInactiveException => (409, "Author inactive", "The referenced Author is inactive."),
             ValidationException validation => (400, "Validation failed", validation.Message),
             BadHttpRequestException badRequest => (badRequest.StatusCode, "Invalid HTTP request",
                 "The request body or parameters could not be read."),

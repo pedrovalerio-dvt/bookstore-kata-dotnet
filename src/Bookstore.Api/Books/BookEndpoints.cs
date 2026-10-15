@@ -10,17 +10,18 @@ public static class BookEndpoints
     {
         var group = endpoints.MapGroup("/api/books").WithTags("Books");
         group.MapGet("/", ListAsync).WithName("ListBooks")
-            .WithSummary("List books by optional category and partial author name.")
-            .WithDescription("Author is a case-insensitive literal substring and is not trimmed; blank input returns 400. Author and exact category filters combine with AND. Missing filters list all books, including inactive ones. Null/missing authors do not match an author search. Unknown or empty category returns 400. No matches returns an empty array. No pagination or guaranteed ordering.")
+            .WithSummary("List books by optional category, author text, and Author ID.")
+            .WithDescription("authorId is exact identity; author is a case-insensitive literal substring and is not trimmed. All supplied filters combine with AND. Invalid IDs, blank author text, and unknown/empty category return 400. Missing filters list all books, including inactive ones. Null/missing authors do not match an author text search. No matches returns an empty array. Inactive Authors' books remain visible. No pagination or guaranteed ordering.")
             .Produces<IReadOnlyList<Book>>().ProducesProblem(400).ProducesProblem(500);
         group.MapGet("/single", FindAsync).WithName("GetBook")
             .WithSummary("Find a book by exactly one of id or exact title.")
-            .WithDescription("Supply exactly one of id or name. Author filtering on this single-book route returns 400; use GET /api/books?author=... for collection search.")
+            .WithDescription("Supply exactly one of id or name. Author text or authorId filtering on this single-book route returns 400; use the collection endpoint for author searches.")
             .Produces<Book>().ProducesProblem(400).ProducesProblem(404).ProducesProblem(500);
         group.MapPost("/", CreateAsync).WithName("CreateBook")
             .WithSummary("Create a book; categoryId accepts an exact category name.")
-            .WithDescription("Requires a nonblank title and nonnegative quantity. Unknown categories return 400. Inactive creation without a date uses server UTC time.")
-            .Produces<Book>(201).ProducesProblem(400).ProducesProblem(415).ProducesProblem(500);
+            .WithDescription("Requires a nonblank title and nonnegative quantity. Supply author text or authorId, not both. Managed links snapshot the active Author name transactionally; unknown Author returns 404 and inactive Author returns 409. Unknown categories return 400. Inactive creation without a date uses server UTC time.")
+            .Produces<Book>(201).ProducesProblem(400).ProducesProblem(404).ProducesProblem(409)
+            .ProducesProblem(415).ProducesProblem(500);
         group.MapPut("/", UpdateAsync).WithName("UpdateBook")
             .WithSummary("Set quantity and active status, returning the complete persisted book.")
             .WithDescription("Id, quantity, and active must all be supplied. An unmatched ID returns 404; this does not insert a book. Deactivation stamps inactiveDate and activation clears it.")
@@ -36,13 +37,16 @@ public static class BookEndpoints
     private static async Task<IResult> ListAsync(
         [Description("Exact category name; combined with author using AND.")] string? category,
         [Description("Optional nonblank, case-insensitive literal author substring. Whitespace is not trimmed.")]
-        string? author, BookService service, CancellationToken cancellationToken) =>
-        TypedResults.Ok(await service.ListAsync(category, author, cancellationToken));
+        string? author,
+        [Description("Optional exact managed Author ID; all supplied filters combine with AND.")]
+        string? authorId, BookService service, CancellationToken cancellationToken) =>
+        TypedResults.Ok(await service.ListAsync(category, author, cancellationToken, authorId));
 
     private static async Task<IResult> FindAsync(
-        string? id, string? name, string? author, BookService service, CancellationToken cancellationToken)
+        string? id, string? name, string? author, string? authorId,
+        BookService service, CancellationToken cancellationToken)
     {
-        var book = await service.FindAsync(new BookQuery(id, name, author), cancellationToken);
+        var book = await service.FindAsync(new BookQuery(id, name, author, authorId), cancellationToken);
         return book is null ? NotFound() : TypedResults.Ok(book);
     }
 

@@ -11,4 +11,5 @@ public sealed record Book(
     bool Active,
     DateTimeOffset? InactiveDate,
     string? Publisher,
-    DateTimeOffset? PublisherDate);
+    DateTimeOffset? PublisherDate,
+    string? AuthorId = null);

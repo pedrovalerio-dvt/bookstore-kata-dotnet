@@ -1,4 +1,5 @@
 using Bookstore.Core.Books;
+using Bookstore.Core.Authors;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;
@@ -18,6 +19,14 @@ public sealed class BookSchemaTransformer : IOpenApiSchemaTransformer
         else if (context.JsonTypeInfo.Type == typeof(CreateBookRequest))
         {
             SetNonNullable(schema, "title");
+        }
+        else if (context.JsonTypeInfo.Type == typeof(Author))
+        {
+            schema.Required = new HashSet<string> { "id", "name", "active", "createdAt", "updatedAt" };
+        }
+        else if (context.JsonTypeInfo.Type == typeof(CreateAuthorRequest))
+        {
+            SetNonNullable(schema, "name");
         }
         else if (context.JsonTypeInfo.Type == typeof(UpdateBookRequest))
         {

@@ -6,7 +6,8 @@ using MongoDB.Driver;
 namespace Bookstore.Tests.Persistence;
 
 [Trait("Category", "Database")]
-public sealed class MongoBookRepositoryTests(MongoFixture fixture) : IClassFixture<MongoFixture>
+[Collection("MongoDB")]
+public sealed class MongoBookRepositoryTests(MongoFixture fixture)
 {
     [Fact]
     public async Task InsertAsync_AllFields_RoundTripsBsonDatesAndGeneratedId()

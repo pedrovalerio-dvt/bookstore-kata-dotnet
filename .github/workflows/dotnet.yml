@@ -20,6 +20,8 @@ jobs:
       - name: Test unit, HTTP, and MongoDB integration paths
         shell: pwsh
         run: ./scripts/Test-Coverage.ps1
+      - name: Verify formatting
+        run: dotnet format Bookstore.slnx --verify-no-changes --no-restore --verbosity quiet
       - name: Publish coverage
         if: always()
         uses: actions/upload-artifact@v4

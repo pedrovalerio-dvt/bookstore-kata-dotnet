@@ -4,7 +4,7 @@
 
 This guide describes the migrated .NET 10 API. There is no web frontend in this
 repository. The API manages a catalogue and absolute stock quantities; it does
-not implement purchasing, reservations, pricing, deletion, or user accounts.
+not implement purchasing, reservations, pricing, book deletion, or user accounts.
 
 Existing routes, camel-case JSON field names, MongoDB identifiers, and stored
 book metadata are retained. Defects and invalid-input behavior were deliberately
@@ -20,6 +20,7 @@ See [OpenAPI](openapi.yaml) for payloads and
 | `id` | Generated 24-character hexadecimal MongoDB ID; preserved for existing records. |
 | `title` | Required, nonblank on creation; duplicate titles remain allowed. |
 | `author` | Optional free text. Collection search supports case-insensitive partial matching. |
+| `authorId` | Optional managed Author identity. New linked creation derives the displayed author credit from that profile; old books may remain unlinked. |
 | `categoryId` | Creation accepts an exact category **name**; responses contain a numeric category ID. Missing/null creates category `0`. |
 | `quantity` | Nonnegative integer representing absolute stock, not a stock adjustment. Creation defaults to `0`; update must explicitly supply it. |
 | `description`, `language`, `publisher` | Optional free text, without a controlled vocabulary or new length restriction. |
@@ -62,6 +63,12 @@ Submit `POST /api/books`:
 A successful response is `201 Created` with the complete inserted book and a
 `Location` header pointing to `/api/books/single?id=<generated-id>`.
 The returned `categoryId` is `6`, not `"Programming"`.
+
+To link a managed Author, supply `authorId` instead of `author`. Supplying both
+non-null values returns `400`. Unknown Author returns `404`; an inactive Author
+returns `409`. Linking snapshots the Author name as the book's author credit.
+Existing free-text creation remains supported and does not implicitly create
+or match an Author profile.
 
 Blank/missing title, negative quantity, unknown category, and an active book
 with an inactivity date return `400`. Invalid JSON or invalid date syntax also
@@ -130,6 +137,12 @@ There is still no pagination, explicit sorting, title filter on list, or
 active-status filter. Results include inactive and legacy negative-stock books.
 Consumers must not assume ordering.
 
+`GET /api/books?authorId=<managed-author-id>` filters by exact Author identity,
+not by name. Combine `authorId`, category, and author text; all supplied
+conditions must match. Malformed/empty Author ID returns `400`, while a
+well-formed unknown identity returns `200 []`. An inactive Author's historical
+books remain searchable. `authorId` is not supported on `/single`.
+
 ## Search by author
 
 Use `GET /api/books?author=kent` to find every book whose stored author contains
@@ -166,6 +179,61 @@ Search is not fuzzy matching, accent folding, transliteration, or a separately
 managed author directory. An accented name does not match its unaccented spelling.
 There is no new pagination or ordering guarantee. Large-catalogue substring
 search may require more time than indexed exact-ID lookup.
+
+## Manage Author profiles
+
+Authors are distinct catalogue identities, not unique name strings. Different
+people may share a name; reuse the same Author ID across that person's books.
+There is no automatic name-based deduplication, author directory matching,
+profile editing, restoration, or co-authorship in this release.
+
+| Operation | Behavior |
+|---|---|
+| `POST /api/authors` | Create a profile; return `201`, the profile, and its lookup Location. |
+| `GET /api/authors` | List active Authors; no matches is `200 []`. |
+| `GET /api/authors?includeInactive=true` | Include inactive profiles; malformed/empty switch returns `400`. |
+| `GET /api/authors/{id}` | Retrieve active or inactive profile; malformed ID is `400`, absent identity is `404`. |
+| `DELETE /api/authors/{id}` | Soft-delete, returning empty `204`; repeat is also `204` without changing its update timestamp. Unknown ID is `404`. |
+
+Create example:
+
+```json
+{
+  "name": "Example Author",
+  "birthDate": "1980-01-02",
+  "nationality": "Example country",
+  "email": "author@example.invalid"
+}
+```
+
+Name is required, nonblank, and at most 255 UTF-16 code units (ordinary letters
+usually count as one; some symbols count as two). Names and nonblank optional
+text are preserved without trimming or normalization. Birth date is optional,
+in calendar `YYYY-MM-DD` format; no past-date restriction is imposed. Nationality
+is optional free text, not a country-code vocabulary. Supplied nationality/email
+cannot be blank, and email must have a valid email format; it is not unique.
+Active defaults to true; explicit false creates an inactive profile.
+
+The system generates the Author ID and `createdAt`/`updatedAt` timestamps.
+Both timestamps match on creation. Deletion changes active to false and updates
+`updatedAt`, but never deletes the profile or modifies linked books, inventory,
+or book activity. An Author ID and a book ID use the same identifier format
+but identify different resources.
+
+New links and Author retirement are strictly ordered. If retirement commits
+first, the competing creation is rejected; if linking commits first, that
+historical book remains after retirement. Existing books are never hidden
+merely because their Author became inactive.
+
+Legacy credits remain unchanged unless an approved mapping explicitly links
+particular book IDs to Author IDs. Mapping preserves original displayed credits,
+including spelling variants. It never assumes that equal names mean the same
+person. See the [operations runbook](author-operations.md) for controlled linking.
+
+**Profile access and retention:** No application authentication is added.
+Approved deployment restrictions must protect Author endpoints and returned
+email/birth date. Soft deletion is not privacy erasure; retention, backups,
+and access approvals remain operational responsibilities.
 
 ## Error feedback and operation
 
