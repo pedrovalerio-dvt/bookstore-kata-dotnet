@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Bookstore.Core.Books;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -8,11 +9,19 @@ public sealed class MongoBookRepository(IMongoDatabase database) : IBookReposito
 {
     private readonly IMongoCollection<BsonDocument> _books = database.GetCollection<BsonDocument>("books");
 
-    public async Task<IReadOnlyList<Book>> ListAsync(int? categoryId, CancellationToken cancellationToken)
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Book>> ListAsync(
+        int? categoryId, string? author, CancellationToken cancellationToken)
     {
         var filter = categoryId is null
             ? Builders<BsonDocument>.Filter.Empty
             : Builders<BsonDocument>.Filter.Eq("categoryId", categoryId.Value);
+        if (author is not null)
+        {
+            // Escape user text so regex metacharacters cannot change literal substring semantics.
+            filter &= Builders<BsonDocument>.Filter.Regex(
+                "author", new BsonRegularExpression(Regex.Escape(author), "i"));
+        }
         var documents = await _books.Find(filter).ToListAsync(cancellationToken);
         return documents.Select(Map).ToArray();
     }

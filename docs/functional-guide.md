@@ -19,7 +19,7 @@ See [OpenAPI](openapi.yaml) for payloads and
 |---|---|
 | `id` | Generated 24-character hexadecimal MongoDB ID; preserved for existing records. |
 | `title` | Required, nonblank on creation; duplicate titles remain allowed. |
-| `author` | Optional free text. Author search remains unsupported. |
+| `author` | Optional free text. Collection search supports case-insensitive partial matching. |
 | `categoryId` | Creation accepts an exact category **name**; responses contain a numeric category ID. Missing/null creates category `0`. |
 | `quantity` | Nonnegative integer representing absolute stock, not a stock adjustment. Creation defaults to `0`; update must explicitly supply it. |
 | `description`, `language`, `publisher` | Optional free text, without a controlled vocabulary or new length restriction. |
@@ -113,7 +113,8 @@ MongoDB default). Duplicate titles are allowed; selection is not ordered.
 
 A found book returns `200`; a miss returns `404`. Supplying neither filter,
 both filters, an invalid ID, a blank title, or any `author` parameter returns
-`400`. Author filtering was not implemented as part of the migration.
+`400`. To search by author, use the collection operation described below;
+author does not become a unique single-book lookup key.
 
 ## List books
 
@@ -128,6 +129,43 @@ after loading the entire catalogue.
 There is still no pagination, explicit sorting, title filter on list, or
 active-status filter. Results include inactive and legacy negative-stock books.
 Consumers must not assume ordering.
+
+## Search by author
+
+Use `GET /api/books?author=kent` to find every book whose stored author contains
+`kent`, regardless of capitalization. For example, `kent`, `KENT`, and `kEnT`
+all match `Kent Beck`. A fragment can occur anywhere in the author text.
+Multiple books by the same author are returned, including inactive books.
+The operation does not alter inventory or any catalogue record.
+
+Combine category and author to narrow results:
+
+```text
+GET /api/books?author=beck&category=Programming
+```
+
+Both conditions must match: this request returns Programming books whose author
+contains `beck`, not all Programming books or all books by that author.
+Category matching remains exact and case-sensitive.
+
+| Search input or result | Outcome |
+|---|---|
+| Author omitted | Existing unfiltered/category-only behavior is unchanged. |
+| Author has no matches | `200 OK` with `[]`, not `404`. |
+| Author is empty or whitespace-only | `400` Problem Details. |
+| Author is nonblank with leading/trailing spaces | Spaces are preserved and must occur in the stored text; they are not trimmed. |
+| Author contains punctuation or search symbols | Text is literal: `.*` matches those two characters, not every author. |
+| Stored author is null or missing | Does not match a supplied author search; still appears in unfiltered listings. |
+| Valid author with an invalid category | `400`; the category filter is not silently discarded. |
+
+URL-encode reserved characters. For example, the fragment `C++ (Jr.)` can be
+sent as `author=C%2B%2B%20%28Jr.%29`; a literal plus sign must be encoded as
+`%2B`, since an unencoded plus in a query is interpreted as a space.
+
+Search is not fuzzy matching, accent folding, transliteration, or a separately
+managed author directory. An accented name does not match its unaccented spelling.
+There is no new pagination or ordering guarantee. Large-catalogue substring
+search may require more time than indexed exact-ID lookup.
 
 ## Error feedback and operation
 
@@ -165,7 +203,7 @@ only and does not prove MongoDB readiness.
 | ID lookup used reference equality | Correct MongoDB ID lookup |
 | No match returned empty 200 | Returns 404 Problem Details |
 | Both lookup filters had precedence rules | Exactly one filter required |
-| Author query threw an unhandled exception | Returns explicit 400 |
+| Author query on `/single` threw an unhandled exception | Returns explicit 400 on `/single`; collection author search is available separately |
 | Missing update fields reset inventory | Both fields required; missing fields rejected |
 | Update returned 201 and incomplete metadata | Returns 200 and complete persisted state |
 | Unmatched update falsely returned success | Returns 404; no insert |

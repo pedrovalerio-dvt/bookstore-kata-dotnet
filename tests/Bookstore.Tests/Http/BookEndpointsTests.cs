@@ -30,7 +30,7 @@ public sealed class BookEndpointsTests
     public async Task ListAsync_ValidFilter_ReturnsBooks(string route, int? categoryId)
     {
         await using var factory = new BookstoreFactory();
-        factory.Repository.Setup(repository => repository.ListAsync(categoryId, It.IsAny<CancellationToken>()))
+        factory.Repository.Setup(repository => repository.ListAsync(categoryId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync([TestBook.Create()]);
         using var client = factory.CreateClient();
 
@@ -41,11 +41,64 @@ public sealed class BookEndpointsTests
         Assert.Equal(TestBook.Create(), Assert.Single(Assert.IsType<Book[]>(books)));
     }
 
+    [Theory]
+    [InlineData("/api/books?author=kEnT", null, "kEnT")]
+    [InlineData("/api/books?author=Beck&category=Programming", 6, "Beck")]
+    [InlineData("/api/books?author=C%2B%2B%20%28Jr.%29", null, "C++ (Jr.)")]
+    [InlineData("/api/books?author=%20Kent%20", null, " Kent ")]
+    public async Task ListAsync_AuthorQuery_ReturnsAllRepositoryMatches(
+        string route, int? categoryId, string author)
+    {
+        await using var factory = new BookstoreFactory();
+        Book[] expected =
+        [
+            TestBook.Create(),
+            TestBook.Create() with { Id = "507f1f77bcf86cd799439012", Title = "Another book", Active = false }
+        ];
+        factory.Repository.Setup(repository => repository.ListAsync(categoryId, author, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync(route);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(expected, await response.Content.ReadFromJsonAsync<Book[]>());
+        factory.Repository.VerifyAll();
+    }
+
+    [Fact]
+    public async Task ListAsync_UnknownAuthor_ReturnsEmptyOk()
+    {
+        await using var factory = new BookstoreFactory();
+        factory.Repository.Setup(repository => repository.ListAsync(null, "nobody", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync("/api/books?author=nobody");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Empty((await response.Content.ReadFromJsonAsync<Book[]>())!);
+    }
+
+    [Fact]
+    public async Task ListAsync_AuthorSearchFailure_ReturnsSafeProblemDetails()
+    {
+        await using var factory = new BookstoreFactory();
+        factory.Repository.Setup(repository => repository.ListAsync(null, "Kent", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("sensitive query diagnostics"));
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync("/api/books?author=Kent");
+
+        await AssertProblemAsync(response, HttpStatusCode.InternalServerError);
+        Assert.DoesNotContain("sensitive", await response.Content.ReadAsStringAsync());
+    }
+
     [Fact]
     public async Task ListAsync_EmptyCatalogue_ReturnsEmptyArray()
     {
         await using var factory = new BookstoreFactory();
-        factory.Repository.Setup(repository => repository.ListAsync(null, It.IsAny<CancellationToken>()))
+        factory.Repository.Setup(repository => repository.ListAsync(null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         using var client = factory.CreateClient();
         Assert.Empty((await client.GetFromJsonAsync<Book[]>("/api/books"))!);
@@ -54,6 +107,10 @@ public sealed class BookEndpointsTests
     [Theory]
     [InlineData("/api/books?category=unknown")]
     [InlineData("/api/books?category=")]
+    [InlineData("/api/books?author=")]
+    [InlineData("/api/books?author=%20%20")]
+    [InlineData("/api/books?author=%09%0A")]
+    [InlineData("/api/books?author=Kent&category=unknown")]
     [InlineData("/api/books/single")]
     [InlineData("/api/books/single?id=bad")]
     [InlineData("/api/books/single?name=Book&author=Author")]
@@ -192,7 +249,7 @@ public sealed class BookEndpointsTests
     public async Task ListAsync_UnexpectedFailure_DoesNotDiscloseException()
     {
         await using var factory = new BookstoreFactory();
-        factory.Repository.Setup(repository => repository.ListAsync(null, It.IsAny<CancellationToken>()))
+        factory.Repository.Setup(repository => repository.ListAsync(null, null, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("sensitive database diagnostics"));
         using var client = factory.CreateClient();
         using var response = await client.GetAsync("/api/books");
@@ -233,11 +290,18 @@ public sealed class BookEndpointsTests
         using var document = JsonDocument.Parse(await client.GetStringAsync("/openapi/v1.json"));
         var root = document.RootElement;
         Assert.StartsWith("3.", root.GetProperty("openapi").GetString());
+        Assert.Equal("1.1.0", root.GetProperty("info").GetProperty("version").GetString());
         var paths = root.GetProperty("paths");
         var books = paths.EnumerateObject().Single(path => path.Name.TrimEnd('/') == "/api/books").Value;
         Assert.True(books.TryGetProperty("get", out _));
         Assert.True(books.TryGetProperty("post", out _));
         Assert.True(books.TryGetProperty("put", out _));
+        var author = books.GetProperty("get").GetProperty("parameters").EnumerateArray()
+            .Single(parameter => parameter.GetProperty("name").GetString() == "author");
+        Assert.Equal("query", author.GetProperty("in").GetString());
+        Assert.False(author.TryGetProperty("required", out var required) && required.GetBoolean());
+        Assert.Equal("string", author.GetProperty("schema").GetProperty("type").GetString());
+        Assert.Contains("case-insensitive", author.GetProperty("description").GetString());
         Assert.True(books.GetProperty("post").GetProperty("responses").GetProperty("201")
             .GetProperty("headers").TryGetProperty("Location", out _));
         Assert.True(books.GetProperty("get").GetProperty("responses").GetProperty("200")

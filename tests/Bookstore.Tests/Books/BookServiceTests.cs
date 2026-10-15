@@ -20,9 +20,9 @@ public sealed class BookServiceTests
     {
         using var source = new CancellationTokenSource();
         IReadOnlyList<Book> expected = [TestBook.Create()];
-        _repository.Setup(repository => repository.ListAsync(categoryId, source.Token)).ReturnsAsync(expected);
+        _repository.Setup(repository => repository.ListAsync(categoryId, null, source.Token)).ReturnsAsync(expected);
 
-        var actual = await CreateService().ListAsync(category, source.Token);
+        var actual = await CreateService().ListAsync(category, null, source.Token);
 
         Assert.Same(expected, actual);
         _repository.VerifyAll();
@@ -34,7 +34,7 @@ public sealed class BookServiceTests
     [InlineData("programming")]
     public async Task ListAsync_UnknownCategory_RejectsBeforeDatabaseAccess(string category)
     {
-        await Assert.ThrowsAsync<ValidationException>(() => CreateService().ListAsync(category, default));
+        await Assert.ThrowsAsync<ValidationException>(() => CreateService().ListAsync(category, null, default));
         _repository.VerifyNoOtherCalls();
     }
 
@@ -143,9 +143,66 @@ public sealed class BookServiceTests
     [Fact]
     public async Task ListAsync_RepositoryFailure_PropagatesFailure()
     {
-        _repository.Setup(repository => repository.ListAsync(null, default))
+        _repository.Setup(repository => repository.ListAsync(null, null, default))
             .ThrowsAsync(new InvalidOperationException("Database unavailable"));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateService().ListAsync(null, default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateService().ListAsync(null, null, default));
+    }
+
+    [Theory]
+    [InlineData(null, null, "kEnT")]
+    [InlineData("Programming", 6, "Beck")]
+    [InlineData(null, null, " C++ (Jr.) ")]
+    [InlineData(null, null, ".*")]
+    public async Task ListAsync_AuthorFilter_ForwardsLiteralTextAndCancellation(
+        string? category, int? categoryId, string author)
+    {
+        using var source = new CancellationTokenSource();
+        IReadOnlyList<Book> expected = [TestBook.Create()];
+        _repository.Setup(repository => repository.ListAsync(categoryId, author, source.Token))
+            .ReturnsAsync(expected);
+
+        var actual = await CreateService().ListAsync(category, author, source.Token);
+
+        Assert.Same(expected, actual);
+        _repository.VerifyAll();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("\t\r\n")]
+    public async Task ListAsync_BlankAuthor_RejectsBeforeDatabaseAccess(string author)
+    {
+        await Assert.ThrowsAsync<ValidationException>(() => CreateService().ListAsync(null, author, default));
+        _repository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task ListAsync_AuthorAndUnknownCategory_RejectsBeforeDatabaseAccess()
+    {
+        await Assert.ThrowsAsync<ValidationException>(() => CreateService().ListAsync("unknown", "Kent", default));
+        _repository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task ListAsync_AuthorHasNoMatches_ReturnsEmptyCollection()
+    {
+        _repository.Setup(repository => repository.ListAsync(null, "nobody", default))
+            .ReturnsAsync([]);
+
+        Assert.Empty(await CreateService().ListAsync(null, "nobody", default));
+    }
+
+    [Fact]
+    public async Task ListAsync_AuthorReadCancelled_PropagatesCancellation()
+    {
+        using var source = new CancellationTokenSource();
+        await source.CancelAsync();
+        _repository.Setup(repository => repository.ListAsync(null, "Kent", source.Token))
+            .ThrowsAsync(new OperationCanceledException(source.Token));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            CreateService().ListAsync(null, "Kent", source.Token));
     }
 
     [Fact]

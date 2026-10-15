@@ -9,8 +9,20 @@ public sealed class BookService(
     IValidator<BookQuery> queryValidator,
     TimeProvider timeProvider)
 {
-    public async Task<IReadOnlyList<Book>> ListAsync(string? category, CancellationToken cancellationToken)
+    /// <summary>Validates collection filters and retrieves books without changing stored records.</summary>
+    /// <param name="category">Exact category name, or null to omit category filtering.</param>
+    /// <param name="author">Nonblank, case-insensitive literal author fragment, preserved without trimming.</param>
+    /// <param name="cancellationToken">Cancellation propagated to repository reads.</param>
+    /// <returns>Books matching every supplied filter.</returns>
+    /// <exception cref="ValidationException">A supplied category is unknown or author is blank.</exception>
+    public async Task<IReadOnlyList<Book>> ListAsync(
+        string? category, string? author, CancellationToken cancellationToken)
     {
+        if (author is not null && string.IsNullOrWhiteSpace(author))
+        {
+            throw new ValidationException("Author must contain non-whitespace text.");
+        }
+
         int? categoryId = null;
         if (category is not null)
         {
@@ -21,7 +33,7 @@ public sealed class BookService(
             }
         }
 
-        return await repository.ListAsync(categoryId, cancellationToken);
+        return await repository.ListAsync(categoryId, author, cancellationToken);
     }
 
     public async Task<Book?> FindAsync(BookQuery query, CancellationToken cancellationToken)

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Bookstore.Core.Books;
 using Microsoft.AspNetCore.Mvc;
 
@@ -9,12 +10,12 @@ public static class BookEndpoints
     {
         var group = endpoints.MapGroup("/api/books").WithTags("Books");
         group.MapGet("/", ListAsync).WithName("ListBooks")
-            .WithSummary("List books, optionally by exact category name.")
-            .WithDescription("Missing category lists all books, including inactive ones. Unknown or empty category returns 400. No pagination or guaranteed ordering.")
+            .WithSummary("List books by optional category and partial author name.")
+            .WithDescription("Author is a case-insensitive literal substring and is not trimmed; blank input returns 400. Author and exact category filters combine with AND. Missing filters list all books, including inactive ones. Null/missing authors do not match an author search. Unknown or empty category returns 400. No matches returns an empty array. No pagination or guaranteed ordering.")
             .Produces<IReadOnlyList<Book>>().ProducesProblem(400).ProducesProblem(500);
         group.MapGet("/single", FindAsync).WithName("GetBook")
             .WithSummary("Find a book by exactly one of id or exact title.")
-            .WithDescription("Supply exactly one of id or name. Author filtering is unsupported and returns 400.")
+            .WithDescription("Supply exactly one of id or name. Author filtering on this single-book route returns 400; use GET /api/books?author=... for collection search.")
             .Produces<Book>().ProducesProblem(400).ProducesProblem(404).ProducesProblem(500);
         group.MapPost("/", CreateAsync).WithName("CreateBook")
             .WithSummary("Create a book; categoryId accepts an exact category name.")
@@ -31,9 +32,12 @@ public static class BookEndpoints
         return endpoints;
     }
 
+    /// <summary>Returns the collection matching the supplied category and literal author fragment.</summary>
     private static async Task<IResult> ListAsync(
-        string? category, BookService service, CancellationToken cancellationToken) =>
-        TypedResults.Ok(await service.ListAsync(category, cancellationToken));
+        [Description("Exact category name; combined with author using AND.")] string? category,
+        [Description("Optional nonblank, case-insensitive literal author substring. Whitespace is not trimmed.")]
+        string? author, BookService service, CancellationToken cancellationToken) =>
+        TypedResults.Ok(await service.ListAsync(category, author, cancellationToken));
 
     private static async Task<IResult> FindAsync(
         string? id, string? name, string? author, BookService service, CancellationToken cancellationToken)

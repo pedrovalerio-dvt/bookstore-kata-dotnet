@@ -41,9 +41,9 @@ public sealed class MongoBookRepositoryTests(MongoFixture fixture) : IClassFixtu
         var programming = await repository.InsertAsync(TestBook.Create() with { Active = false }, default);
         await repository.InsertAsync(TestBook.Create() with { CategoryId = 1 }, default);
 
-        Assert.Equal(programming, Assert.Single(await repository.ListAsync(6, default)));
-        Assert.Equal(2, (await repository.ListAsync(null, default)).Count);
-        Assert.Empty(await repository.ListAsync(3, default));
+        Assert.Equal(programming, Assert.Single(await repository.ListAsync(6, null, default)));
+        Assert.Equal(2, (await repository.ListAsync(null, null, default)).Count);
+        Assert.Empty(await repository.ListAsync(3, null, default));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public sealed class MongoBookRepositoryTests(MongoFixture fixture) : IClassFixtu
         var reactivated = await repository.UpdateInventoryAsync(inserted.Id, 2, true, null, default);
         Assert.Equal(inserted with { Quantity = 2 }, reactivated);
         Assert.Equal(reactivated, await repository.FindAsync(new BookQuery(inserted.Id, null), default));
-        Assert.Single(await repository.ListAsync(null, default));
+        Assert.Single(await repository.ListAsync(null, null, default));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public sealed class MongoBookRepositoryTests(MongoFixture fixture) : IClassFixtu
     {
         var repository = new MongoBookRepository(fixture.CreateDatabase());
         Assert.Null(await repository.UpdateInventoryAsync(TestBook.Id, 1, true, null, default));
-        Assert.Empty(await repository.ListAsync(null, default));
+        Assert.Empty(await repository.ListAsync(null, null, default));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public sealed class MongoBookRepositoryTests(MongoFixture fixture) : IClassFixtu
             }
         ]);
 
-        var books = await new MongoBookRepository(database).ListAsync(null, default);
+        var books = await new MongoBookRepository(database).ListAsync(null, null, default);
 
         Assert.Equal(2, books.Count);
         Assert.All(books, book =>
@@ -111,7 +111,7 @@ public sealed class MongoBookRepositoryTests(MongoFixture fixture) : IClassFixtu
         await database.GetCollection<BsonDocument>("books").InsertOneAsync(
             new BsonDocument { ["_id"] = ObjectId.GenerateNewId(), ["quantity"] = "invalid" });
         await Assert.ThrowsAsync<InvalidCastException>(() =>
-            new MongoBookRepository(database).ListAsync(null, default));
+            new MongoBookRepository(database).ListAsync(null, null, default));
     }
 
     [Fact]
@@ -120,6 +120,77 @@ public sealed class MongoBookRepositoryTests(MongoFixture fixture) : IClassFixtu
         var repository = new MongoBookRepository(fixture.CreateDatabase());
         using var source = new CancellationTokenSource();
         await source.CancelAsync();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.ListAsync(null, source.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.ListAsync(null, null, source.Token));
+    }
+
+    [Fact]
+    public async Task ListAsync_PartialAuthor_ReturnsEveryCaseInsensitiveMatchIncludingInactive()
+    {
+        var database = fixture.CreateDatabase();
+        var repository = new MongoBookRepository(database);
+        var first = await repository.InsertAsync(TestBook.Create(), default);
+        var second = await repository.InsertAsync(TestBook.Create() with
+        {
+            Title = "Another book",
+            Author = "KENT BECK",
+            CategoryId = 1,
+            Active = false
+        }, default);
+        await repository.InsertAsync(TestBook.Create() with { Author = "Other writer" }, default);
+        await repository.InsertAsync(TestBook.Create() with { Author = null }, default);
+        await database.GetCollection<BsonDocument>("books").InsertOneAsync(
+            new BsonDocument { ["_id"] = ObjectId.GenerateNewId(), ["title"] = "Missing author" });
+
+        var matches = await repository.ListAsync(null, "eNt b", default);
+
+        Assert.Equal(2, matches.Count);
+        Assert.Contains(first, matches);
+        Assert.Contains(second, matches);
+        Assert.Equal(first, Assert.Single(await repository.ListAsync(6, "eNt b", default)));
+        Assert.Empty(await repository.ListAsync(3, "eNt b", default));
+        Assert.Empty(await repository.ListAsync(null, "nobody", default));
+        Assert.Equal(5, (await repository.ListAsync(null, null, default)).Count);
+    }
+
+    [Theory]
+    [InlineData(".*")]
+    [InlineData("C++ (Jr.)")]
+    [InlineData("[Beck]")]
+    [InlineData(@"A\B")]
+    [InlineData("^writer$")]
+    [InlineData(" Kent ")]
+    [InlineData("O'Neil & Sons")]
+    public async Task ListAsync_RegexSymbolsAndWhitespace_TreatsFragmentLiterally(string fragment)
+    {
+        var repository = new MongoBookRepository(fixture.CreateDatabase());
+        var expected = await repository.InsertAsync(
+            TestBook.Create() with { Author = $"prefix{fragment}suffix" }, default);
+        await repository.InsertAsync(TestBook.Create() with { Author = "Unrelated writer Kent" }, default);
+
+        var result = await repository.ListAsync(null, fragment, default);
+
+        Assert.Equal(expected, Assert.Single(result));
+    }
+
+    [Fact]
+    public async Task ListAsync_AccentedAuthor_HandlesCaseWithoutAccentFolding()
+    {
+        var repository = new MongoBookRepository(fixture.CreateDatabase());
+        var expected = await repository.InsertAsync(
+            TestBook.Create() with { Author = "Ren\u00e9 Writer" }, default);
+
+        Assert.Equal(expected, Assert.Single(await repository.ListAsync(null, "REN\u00c9", default)));
+        Assert.Empty(await repository.ListAsync(null, "Rene", default));
+    }
+
+    [Fact]
+    public async Task ListAsync_AuthorQueryCancelled_PropagatesCancellation()
+    {
+        var repository = new MongoBookRepository(fixture.CreateDatabase());
+        using var source = new CancellationTokenSource();
+        await source.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            repository.ListAsync(6, "Kent", source.Token));
     }
 }

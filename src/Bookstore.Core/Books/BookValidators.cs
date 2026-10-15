@@ -40,7 +40,7 @@ public sealed class BookQueryValidator : AbstractValidator<BookQuery>
             .WithMessage("Id must contain exactly 24 hexadecimal characters.");
         RuleFor(request => request.Name).NotEmpty().When(request => request.Name is not null);
         RuleFor(request => request.Author).Null()
-            .WithMessage("Filtering by author is not supported.");
+            .WithMessage("Use the books collection endpoint to search by author.");
     }
 }
 

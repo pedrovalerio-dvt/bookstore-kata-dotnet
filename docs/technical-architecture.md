@@ -47,6 +47,7 @@ design, not a claim of a complete retail DDD model or regulatory certification.
 | `.github/workflows/dotnet.yml` | CI runs the same gate and uploads coverage |
 | `mongo-init` | Legacy category seeds and new idempotent book indexes |
 | `docs/legacy` | Historical Java documentation from commit `cebc7fb` |
+| `specs/001-search-by-author` | Approved feature specification, release task breakdown, and QA checklist |
 
 Java source and Maven configuration have been removed rather than maintained as
 a second runnable stack. Historical source remains in Git at `cebc7fb`.
@@ -58,13 +59,14 @@ Trailing-slash variants are accepted by ASP.NET routing.
 
 | Method and route | Successful result | Expected error results |
 |---|---|---|
-| `GET /api/books` | 200, array | 400 invalid category; 500 unexpected failure |
+| `GET /api/books?category=...&author=...` (both optional) | 200, array | 400 invalid category or blank author; 500 unexpected failure |
 | `GET /api/books/single?id=...` or `?name=...` | 200, Book | 400 invalid/ambiguous/unsupported filter; 404 absent; 500 failure |
 | `POST /api/books` | 201, Book and Location | 400 validation/binding; 415 media type; 500 failure |
 | `PUT /api/books` | 200, complete Book | 400 validation/binding; 404 absent; 415 media type; 500 failure |
 | `GET /api/books/health` | Empty 200 | Liveness only |
 
-There is no DELETE route or author-search feature. Routing failures such as
+Collection author search uses a case-insensitive literal substring. The
+single-book route remains ID/title-only. There is no DELETE route. Routing failures such as
 404 and 405 also use status-code Problem Details. Framework and proxy errors
 outside the application, such as a disconnected socket, are not a JSON contract.
 No upstream HTTP service exists; MongoDB uses its own wire protocol.
@@ -101,6 +103,39 @@ titles remain allowed. Listing still returns an unpaginated array to preserve
 the chosen contract, so unfiltered listing remains O(N) materialization. No
 unmeasured claim of unlimited catalogue scalability is made.
 
+### Author substring search
+
+The list endpoint binds optional `author` text and passes it, category, and
+the request CancellationToken to `BookService.ListAsync`. Core rejects
+non-null empty/whitespace-only author input with the existing ValidationException
+path (400 Problem Details). Nonblank text is not trimmed or case-normalized.
+
+`IBookRepository.ListAsync(categoryId, author, cancellationToken)` expresses the
+two optional predicates. The MongoDB implementation adds a BSON regex on
+`author` with option `i`, escaping input through `Regex.Escape` before building
+`BsonRegularExpression`. The pattern is unanchored so literal text can match
+anywhere in a stored author. The category equality filter and author regex are
+combined with AND and executed in one async MongoDB find.
+
+Escaping is required for correctness as well as safe handling of user text:
+input such as `.*`, brackets, `+`, or backslashes must not become a pattern
+operator. Matching uses MongoDB's regex case behavior, not collection collation,
+accent folding, culture-specific transliteration, or fuzzy matching. Null/missing
+authors do not satisfy the regex; duplicate names and inactive books remain
+eligible. Result shape, unspecified ordering, and empty-array semantics are unchanged.
+
+This unanchored case-insensitive substring search is not an index-backed
+prefix/exact lookup. No author B-tree index is added with an unsupported
+performance claim. MongoDB can use the existing category index when applicable,
+but author-only search can scan the collection. There is no new latency SLA,
+pagination, search service, dependency, stored field, or data migration.
+Existing cancellation and exception/logging behavior remains in force.
+
+The [approved feature](../specs/001-search-by-author/spec.md),
+[release specification](../specs/001-search-by-author/release.md), and
+[QA checklist](../specs/001-search-by-author/checklists/qa.md) record scope,
+implementation tasks, automated evidence, rollout, and manual acceptance.
+
 ### Atomic updates and accurate outcomes
 
 `FindOneAndUpdateAsync` modifies quantity, active, and inactiveDate and returns
@@ -118,8 +153,9 @@ there is no optimistic concurrency token; absolute writes remain last-write-wins
 
 Title must be nonblank, new quantity must be nonnegative, IDs must be 24 hex
 characters, and categories must be exact names. Lookup requires one supported
-filter, not ambiguous precedence. Unsupported author input is an explicit
-validation error. Category definitions remain a read-only list in Core; the
+filter, not ambiguous precedence. Author input on `/single` remains an explicit
+validation error directing consumers to the collection search. Blank collection
+author input is also a validation error. Category definitions remain a read-only list in Core; the
 legacy categories collection is not consulted.
 
 No new maximum text lengths, unique-title requirement, publication chronology,
@@ -209,11 +245,11 @@ No immutable business audit log is implemented.
 | Test class | Evidence provided |
 |---|---|
 | `Books/BookValidatorsTests.cs` | Missing/blank titles, quantity boundaries, every category, bad IDs, omitted update values, ambiguous/unsupported lookup |
-| `Books/BookServiceTests.cs` | Mocked repository isolation, query pushdown, creation, timestamps, updates, misses, failure propagation, cancellation |
-| `Http/BookEndpointsTests.cs` | WebApplicationFactory real HTTP pipeline, defaults, routes, statuses, Location, payloads, JSON/media errors, trace headers, redaction, OpenAPI, UI environment gate |
+| `Books/BookServiceTests.cs` | Mocked repository isolation, query pushdown, literal author forwarding, blank-author rejection, category intersection, creation, timestamps, updates, misses, failure propagation, cancellation |
+| `Http/BookEndpointsTests.cs` | WebApplicationFactory real HTTP pipeline, author-query binding/encoding, multiple/empty search results, defaults, routes, statuses, Location, payloads, JSON/media errors, trace headers, redaction, OpenAPI, UI environment gate |
 | `Persistence/MongoConfigurationTests.cs` | URI rejection, options binding, singleton client and scoped repository lifetimes |
-| `Persistence/MongoBookRepositoryTests.cs` | Real MongoDB filtering, ObjectId equality, BSON dates, metadata preservation, no upsert, legacy null fields, mapping errors, cancellation |
-| `Persistence/BookWorkflowTests.cs` | HTTP-to-real-MongoDB create/find/list/update/missing-book workflow |
+| `Persistence/MongoBookRepositoryTests.cs` | Real MongoDB literal author substrings, case/accent behavior, AND filtering, punctuation escaping, authorless records, ObjectId equality, BSON dates, metadata preservation, no upsert, mapping errors, cancellation |
+| `Persistence/BookWorkflowTests.cs` | HTTP-to-real-MongoDB create/find/list/update workflow and multi-book author search with category intersection |
 
 `Http/BookstoreFactory.cs`, `Persistence/MongoFixture.cs`, and `TestBook.cs`
 provide fixtures, dependency substitution, and representative test data.
@@ -234,6 +270,9 @@ assembly coverage lower than authored-source coverage. Read the Cobertura
 report, not an assumption based on test count.
 
 The migration verification run passed **110 tests, with no skipped tests**:
+
+These are historical migration figures for `bdfddf6`. Current author-search
+release results are recorded in the linked release specification.
 
 | Coverage scope | Measured line coverage |
 |---|---|

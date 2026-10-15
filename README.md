@@ -1,7 +1,8 @@
 # Bookstore
 
 Book catalogue and inventory API using .NET 10 Minimal APIs and MongoDB.
-Create books, find by ID or exact title, filter by category, and update stock
+Create books, find by ID or exact title, search by partial author name,
+filter by category, and update stock
 and active status. Existing MongoDB ObjectIds and document field names are retained.
 
 ## Prerequisites
@@ -44,8 +45,15 @@ script described in the architecture document.
 - [Functional guide](docs/functional-guide.md).
 - [Technical architecture and migration changes](docs/technical-architecture.md).
 - [Historical Java baseline](docs/legacy/technical-architecture.md).
+- [Search by Author release specification](specs/001-search-by-author/release.md)
+  and [QA checklist](specs/001-search-by-author/checklists/qa.md).
 
 No staging endpoint is configured in this repository.
+
+Author search example: `GET /api/books?author=beck&category=Programming`.
+Author matching is a case-insensitive literal substring; both filters must
+match when combined. Blank author input returns `400`; no matches returns `[]`.
+The single-book route still accepts only ID or exact title.
 
 ## Testing and coverage
 

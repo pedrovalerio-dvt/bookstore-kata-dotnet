@@ -5,8 +5,9 @@ info:
   description: 'MongoDB-backed .NET 10 API. No application authentication is configured. Errors use Problem
     Details with a trace instance and X-Trace-Id header. Dates are ISO 8601 date-times. Null response
     properties are omitted. Category names are case-sensitive: Fiction, Non-Fiction, Science, Biography,
-    Children, Programming.'
-  version: 1.0.0
+    Children, Programming. Collection author search uses a case-insensitive literal substring and can
+    be combined with category.'
+  version: 1.1.0
 servers:
 - url: /
 paths:
@@ -14,13 +15,21 @@ paths:
     get:
       tags:
       - Books
-      summary: List books, optionally by exact category name.
-      description: Missing category lists all books, including inactive ones. Unknown or empty category
-        returns 400. No pagination or guaranteed ordering.
+      summary: List books by optional category and partial author name.
+      description: Author is a case-insensitive literal substring and is not trimmed; blank input returns
+        400. Author and exact category filters combine with AND. Missing filters list all books, including
+        inactive ones. Null/missing authors do not match an author search. Unknown or empty category returns
+        400. No matches returns an empty array. No pagination or guaranteed ordering.
       operationId: ListBooks
       parameters:
       - name: category
         in: query
+        description: Exact category name; combined with author using AND.
+        schema:
+          type: string
+      - name: author
+        in: query
+        description: Optional nonblank, case-insensitive literal author substring. Whitespace is not trimmed.
         schema:
           type: string
       responses:
@@ -195,7 +204,8 @@ paths:
       tags:
       - Books
       summary: Find a book by exactly one of id or exact title.
-      description: Supply exactly one of id or name. Author filtering is unsupported and returns 400.
+      description: Supply exactly one of id or name. Author filtering on this single-book route returns
+        400; use GET /api/books?author=... for collection search.
       operationId: GetBook
       parameters:
       - name: id

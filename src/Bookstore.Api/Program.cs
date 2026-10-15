@@ -67,12 +67,13 @@ builder.Services.AddOpenApi(options =>
     options.AddDocumentTransformer((document, _, _) =>
     {
         document.Info.Title = "Bookstore API";
-        document.Info.Version = "1.0.0";
+        document.Info.Version = "1.1.0";
         document.Info.Description =
             "MongoDB-backed .NET 10 API. No application authentication is configured. " +
             "Errors use Problem Details with a trace instance and X-Trace-Id header. " +
             "Dates are ISO 8601 date-times. Null response properties are omitted. " +
-            "Category names are case-sensitive: Fiction, Non-Fiction, Science, Biography, Children, Programming.";
+            "Category names are case-sensitive: Fiction, Non-Fiction, Science, Biography, Children, Programming. " +
+            "Collection author search uses a case-insensitive literal substring and can be combined with category.";
         document.Servers = [new Microsoft.OpenApi.OpenApiServer { Url = "/" }];
         return Task.CompletedTask;
     });
